@@ -86,3 +86,53 @@ DataFlow is designed to streamline the collection and processing of financial da
 - Python 3.12
 - MySQL database
 - Chrome browser (for Selenium-based crawling)
+
+```mermaid
+flowchart TD
+    subgraph "控制層 Control Layer"
+        WS[Webserver]
+        UI["UI (Flask 框架)"]
+        WS --- UI
+    end
+    
+    subgraph "調度層 Scheduling Layer"
+        SC[Scheduler]
+        DP[DAG Processor]
+        TR[Triggerer]
+        SC --- DP
+    end
+    
+    subgraph "執行層 Execution Layer"
+        EX[Executor]
+        WK[Worker]
+        EX --- WK
+    end
+    
+    subgraph "存儲層 Storage Layer"
+        MD[(Metadata Database)]
+        DAGs[DAG Files]
+        MQ[Message Queue]
+        style MQ stroke-dasharray: 5 5
+    end
+    
+    WS <--> MD
+    SC <--> MD
+    EX <--> MD
+    TR <--> MD
+    DP <--> DAGs
+    SC <--> DAGs
+    WK <--> DAGs
+    EX <-.-> MQ
+    WK <-.-> MQ
+    SC --> EX
+    TR --> SC
+    
+    classDef database stroke:#333,stroke-width:2px;
+    classDef storage stroke:#33f,stroke-width:1px;
+    classDef scheduler stroke:#393,stroke-width:1px;
+    classDef executor stroke:#939,stroke-width:1px;
+    class MD database;
+    class DAGs,MQ storage;
+    class SC,DP,TR scheduler;
+    class EX,WK executor;
+```

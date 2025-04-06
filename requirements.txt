@@ -1,0 +1,12 @@
+mysqlclient==2.1.1
+pymysql==1.0.2
+googlemaps==4.6.0
+opencv-python==4.6.0.66
+OpenCC==1.1.1
+keras==3.5.0
+tensorflow==2.16.2
+matplotlib
+boto3
+cloudscraper==1.2.71
+selenium
+webdriver-manager

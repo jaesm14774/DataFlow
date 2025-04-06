@@ -1,0 +1,62 @@
+# Airflow sensitive information
+# Ignore all credential files
+**/credential.csv
+**/credentials.csv
+**/sql_config.csv
+**/Discord.csv
+**/Discord.txt
+**/Line.csv
+**/youtube_token.csv
+
+# Ignore logs directory
+logs/
+
+# Ignore config directories
+config/
+**/config/
+*.env
+**/config.py
+
+# Ignore any file that might contain tokens, keys, passwords
+**/*token*
+**/*key*
+**/*secret*
+**/*password*
+**/*credential*
+
+# Python related
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+tmp/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE related
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS related
+.DS_Store
+Thumbs.db

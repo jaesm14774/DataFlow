@@ -898,7 +898,7 @@ class StockCalculateBrokerTenDaysRecommendationProcess(StockCalculateLogic):
         self.load()
         self.calculate()
         self.save()
-        self.another_calculate_and_save() #儲存最新數據進 券商進出_十日
+        # self.another_calculate_and_save() #儲存最新數據進 券商進出_十日
         self.end()      
 
 

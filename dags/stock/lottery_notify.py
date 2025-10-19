@@ -96,6 +96,7 @@ class StockLotteryCollectProcess(StockCollectLogic):
         #!!!
         #exception(Now not good method to handle error condition)
         df=df[df['總承銷金額(元)'] != '未訂出']
+        df=df.replace('None', None)
 
         #!!!
 

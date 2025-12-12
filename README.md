@@ -10,6 +10,7 @@ DataFlow is designed to streamline the collection and processing of financial da
 - Chinese news article crawling from multiple sources
 - Notification delivery through Discord and Line
 - Google Trends data collection
+- Google Play game pre-registration and new releases collection (支援 Google Play、QooApp 多來源，自動去重)
 
 ## Technical Highlights
 
@@ -41,7 +42,7 @@ DataFlow is designed to streamline the collection and processing of financial da
 ├── dags/                   # Airflow DAG definitions
 │   ├── common/             # Common utilities and configurations
 │   ├── credit_cards/       # Credit card data collection
-│   ├── game/               # Game-related data collection
+│   ├── game/               # Game-related data collection (pre-registration & new releases)
 │   ├── lib/                # Core library functions
 │   ├── news_ch/            # Chinese news collection
 │   │   └── news_crawler/   # News crawling modules
@@ -86,6 +87,78 @@ DataFlow is designed to streamline the collection and processing of financial da
 - Python 3.12
 - MySQL database
 - Chrome browser (for Selenium-based crawling)
+
+## Database Maintenance
+
+### 遊戲事前登陸資料表 (pre_registration)
+
+#### 資料來源
+- Google Play：透過 Google Search API 搜尋並抓取 Google Play 事前登陸頁面
+- QooApp：從 QooApp 新聞標籤頁面抓取事前登錄相關遊戲資訊（https://news.qoo-app.com/tag/%E4%BA%8B%E5%89%8D%E7%99%BB%E9%8C%84）
+
+#### 去重機制
+- 根據 `game_id` 去重（保留第一筆）
+- 根據 `game_url` 去重（保留第一筆）
+- 寫入資料庫前會先檢查現有資料，只寫入新的遊戲
+
+### 遊戲新上架資料表 (new_releases)
+
+#### 刪除重複資料
+
+```sql
+-- 方法1: 刪除重複的 game_id，保留 id 最小的記錄
+DELETE t1 FROM new_releases t1
+INNER JOIN new_releases t2 
+WHERE t1.id > t2.id AND t1.game_id = t2.game_id;
+
+-- 方法2: 刪除重複的 game_url，保留 id 最小的記錄
+DELETE t1 FROM new_releases t1
+INNER JOIN new_releases t2 
+WHERE t1.id > t2.id AND t1.game_url = t2.game_url;
+
+-- 方法3: 刪除同時重複 game_id 和 game_url 的記錄
+DELETE t1 FROM new_releases t1
+INNER JOIN new_releases t2 
+WHERE t1.id > t2.id 
+  AND t1.game_id = t2.game_id 
+  AND t1.game_url = t2.game_url;
+```
+
+#### 設定主鍵 (Primary Key)
+
+```sql
+-- 檢查現有主鍵
+SHOW KEYS FROM new_releases WHERE Key_name = 'PRIMARY';
+
+-- 如果已有主鍵，先刪除
+ALTER TABLE new_releases DROP PRIMARY KEY;
+
+-- 設定 game_id 為主鍵（如果 game_id 唯一）
+ALTER TABLE new_releases ADD PRIMARY KEY (game_id);
+
+-- 或者設定複合主鍵（game_id + source）
+ALTER TABLE new_releases ADD PRIMARY KEY (game_id, source);
+
+-- 如果 id 欄位存在且需要保留為自增主鍵，可以設定 game_id 為唯一索引
+ALTER TABLE new_releases ADD UNIQUE INDEX idx_game_id (game_id);
+ALTER TABLE new_releases ADD UNIQUE INDEX idx_game_url (game_url);
+```
+
+#### 檢查重複資料
+
+```sql
+-- 檢查重複的 game_id
+SELECT game_id, COUNT(*) as count 
+FROM new_releases 
+GROUP BY game_id 
+HAVING COUNT(*) > 1;
+
+-- 檢查重複的 game_url
+SELECT game_url, COUNT(*) as count 
+FROM new_releases 
+GROUP BY game_url 
+HAVING COUNT(*) > 1;
+```
 
 ```mermaid
 flowchart TD

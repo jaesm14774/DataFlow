@@ -1704,9 +1704,20 @@ class TVBS_SaveMoney(NewsLogic):
             response=requests.post(f'{self._domain_url}/{page_num}',headers=self._headers, timeout=20)
             soup=BeautifulSoup(response.text,'lxml')
 
-        data=[self.parse_json(section) for section in soup.find_all('script', {'type':'application/ld+json'}) if 'itemListElement' in self.parse_json(section)][0]
+        json_data_list=[self.parse_json(section) for section in soup.find_all('script', {'type':'application/ld+json'}) if 'itemListElement' in self.parse_json(section)]
+        
+        if not json_data_list:
+            print(f'無法找到包含 itemListElement 的 JSON-LD 數據，URL: {self._domain_url}')
+            return pd.DataFrame(columns=['article_id', 'author', 'created_at', 'title', 'brief_content', 'views', 'img_url', 'article_url', 'create_time', 'source'])
+        
+        data=json_data_list[0]
         data=data['itemListElement']
         article_id_list=[d['url'].split('/')[-1] for d in data]
+        
+        if not article_id_list:
+            print(f'無法從 JSON-LD 數據中提取文章 ID，URL: {self._domain_url}')
+            return pd.DataFrame(columns=['article_id', 'author', 'created_at', 'title', 'brief_content', 'views', 'img_url', 'article_url', 'create_time', 'source'])
+        
         df=pd.read_sql_query(f"""
             select 
                 article_id, author, created_at, title, substring(content,1,100) brief_content, 

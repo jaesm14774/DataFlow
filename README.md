@@ -90,6 +90,18 @@ DataFlow is designed to streamline the collection and processing of financial da
 
 ## Recent Fixes
 
+### 2025-12-23: 修復 save_money TVBS_SaveMoney IndexError
+
+修復 `news_ch/news_crawler/module.py` 中 `TVBS_SaveMoney.get_article_url_from()` 方法的 `IndexError`。當網頁找不到包含 `itemListElement` 的 JSON-LD script 標籤時，列表推導式返回空列表，訪問 `[0]` 會導致錯誤。
+
+**修復方式：**
+- 先將列表推導式結果存儲到變數
+- 檢查列表是否為空，為空則返回空的 DataFrame 並記錄錯誤訊息
+- 檢查 `article_id_list` 是否為空，避免 SQL 查詢錯誤
+
+**影響範圍：**
+- `TVBS_SaveMoney.get_article_url_from()` (TVBS 優惠好康情報)
+
 ### 2025-12-25: 修復新聞收集 UTF-8 BOM 錯誤
 
 修復 `news_ch/news_crawler/module.py` 中 JSON 解析錯誤。當 API 回傳的內容包含 UTF-8 BOM (Byte Order Mark) 時，直接使用 `.json()` 會導致 `JSONDecodeError`。

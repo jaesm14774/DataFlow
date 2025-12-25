@@ -108,8 +108,12 @@ def fetch_bahamut_new_releases():
                 if not game_url:
                     continue
                     
-                if not game_url.startswith('http'):
-                    game_url = domain_url + game_url if game_url.startswith('/') else domain_url + '/' + game_url
+                if not game_url.startswith('http') and not game_url.startswith('//gnn.gamer.com.tw'):
+                    game_url = domain_url + game_url if game_url.startswith('/') else domain_url + '/'
+                elif game_url.startswith('//gnn.gamer.com.tw'):
+                    game_url = 'https:' + game_url
+                else:
+                    game_url = game_url
                 
                 title_tag = item.find('p', class_='GN-lbox3B_title')
                 if not title_tag:

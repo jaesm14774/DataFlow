@@ -88,6 +88,20 @@ DataFlow is designed to streamline the collection and processing of financial da
 - MySQL database
 - Chrome browser (for Selenium-based crawling)
 
+## Recent Fixes
+
+### 2025-12-25: 修復新聞收集 UTF-8 BOM 錯誤
+
+修復 `news_ch/news_crawler/module.py` 中 JSON 解析錯誤。當 API 回傳的內容包含 UTF-8 BOM (Byte Order Mark) 時，直接使用 `.json()` 會導致 `JSONDecodeError`。
+
+**修復方式：**
+在所有 API 請求後，解析 JSON 前設定 `response.encoding='utf-8-sig'`，自動處理 BOM。
+
+**影響範圍：**
+- `LibertyTimes.get_article_url_from()` (自由時報)
+- `Anue.get_article_url_from()` (鉅亨網)
+- `UDN.get_article_url_from()` (聯合新聞網)
+
 ## Database Maintenance
 
 ### 遊戲事前登陸資料表 (pre_registration)

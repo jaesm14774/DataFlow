@@ -143,6 +143,7 @@ class Anue(NewsLogic):
             f'https://api.cnyes.com/media/api/v1/newslist/category/headline?limit=30'
         )
         a=requests.get(u,headers=self._headers,timeout=self._timeout)
+        a.encoding='utf-8-sig'
         a=a.json()
         
         total_page=a['items']['last_page']
@@ -155,7 +156,8 @@ class Anue(NewsLogic):
                 f'limit=30&page={page_num}'
             )
             
-            a=requests.get(u,headers=self._headers,timeout=self._timeout)           
+            a=requests.get(u,headers=self._headers,timeout=self._timeout)
+            a.encoding='utf-8-sig'
             a=a.json()
             dat=pd.DataFrame(a['items']['data'])
             
@@ -704,6 +706,7 @@ class United(NewsLogic):
             a=requests.get(f'https://udn.com/api/more?page={page_num+1}&id=&channelId=1&cate_id=99&type=breaknews',
                            headers=self._headers,
                            timeout=self._timeout)
+            a.encoding='utf-8-sig'
             a=a.json()
             a=a['lists']
             
@@ -846,8 +849,10 @@ class LibertyTimes(NewsLogic):
         TEMP=[]
         for page_num in range(1,self._page+1):
             #第一頁資料沒有編號，其他頁a['data']後不是list，還是json檔，key是吐出資料的序號
-            a=requests.get(f'{self._domain_url}/ajax/breakingnews/all/{page_num}',
-                          headers=self._headers,timeout=self._timeout).json()
+            response=requests.get(f'{self._domain_url}/ajax/breakingnews/all/{page_num}',
+                          headers=self._headers,timeout=self._timeout)
+            response.encoding='utf-8-sig'
+            a=response.json()
             
             if isinstance(a['data'],list):
                 TEMP.append(pd.DataFrame(a['data']))

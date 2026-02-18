@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import datetime
 import re
+import time
 from bs4 import BeautifulSoup
 from common.config import credential_path, sql_configure_path, discord_token_path, chrome_driver_path
 from lib.google import google_search
@@ -18,6 +19,9 @@ from selenium.webdriver.common.by import By
 app_name = 'game_pre_registration'
 database_name = 'game'
 table_name = 'pre_registration'
+
+# Google Play 事前登錄頁面固定 URL，避免依賴搜尋結果
+GOOGLE_PLAY_PRE_REG_URL = 'https://play.google.com/store/apps/collection/promotion_3000000d51_pre_registration_games?hl=zh_TW'
 
 def _get_chrome_driver():
     chrome_options = Options()
@@ -38,8 +42,12 @@ def fetch_search_results(**kwargs):
     kwargs['ti'].xcom_push(key='search_results', value=results)
 
 def parse_search_results(**kwargs):
-    results = kwargs['ti'].xcom_pull(key='search_results', task_ids='fetch_search_results')
-    url = next((result['link'] for result in results if result['title'] in ['Pre-registration games', 'Google Play']), None)
+    results = kwargs['ti'].xcom_pull(key='search_results', task_ids='fetch_search_results') or []
+    url = next(
+        (r['link'] for r in results if 'promotion_3000000d51_pre_registration_games' in r.get('link', '')),
+        None
+    )
+    url = url or GOOGLE_PLAY_PRE_REG_URL
     kwargs['ti'].xcom_push(key='pre_registration_url', value=url)
 
 # def fetch_game_details(**kwargs):
@@ -78,35 +86,49 @@ def parse_search_results(**kwargs):
     # kwargs['ti'].xcom_push(key='game_details', value=games)
 
 def fetch_google_play_pre_registration(**kwargs):
-    url = kwargs['ti'].xcom_pull(key='pre_registration_url', task_ids='parse_search_results')
+    url = kwargs['ti'].xcom_pull(key='pre_registration_url', task_ids='parse_search_results') or GOOGLE_PLAY_PRE_REG_URL
     games = []
-    
+
     try:
         driver = _get_chrome_driver()
         driver.get(url)
-        
+
         WebDriverWait(driver, 20).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="listitem"]'))
         )
-        
+
+        # 捲動載入 lazy loading 內容
+        last_height = driver.execute_script('return document.body.scrollHeight')
+        for _ in range(5):
+            driver.execute_script('window.scrollTo(0, document.body.scrollHeight);')
+            time.sleep(1)
+            new_height = driver.execute_script('return document.body.scrollHeight')
+            if new_height == last_height:
+                break
+            last_height = new_height
+
         soup = BeautifulSoup(driver.page_source, 'lxml')
         domain_url = 'https://play.google.com'
-        
+
         for part in soup.find_all('div', {'role': 'listitem'}):
             img_tag = part.find('img')
             if not img_tag:
                 continue
-                
+
             title = img_tag.get('alt', '').replace('Icon image ', '').strip()
             link_tag = part.find('a')
             if not link_tag:
                 continue
-                
-            game_url = domain_url + link_tag.get('href', '').strip()
-            img = img_tag.get('srcset', '').strip()
-            game_id = game_url.split('id=')[-1] if 'id=' in game_url else ''
-            
-            if title and game_url and img and game_id:
+
+            href = link_tag.get('href', '').strip()
+            game_url = (domain_url + href) if href.startswith('/') else href
+            if 'id=' not in game_url:
+                continue
+
+            img = img_tag.get('srcset', '').strip() or img_tag.get('src', '').strip()
+            game_id = game_url.split('id=')[-1].split('&')[0]
+
+            if title and game_url and game_id:
                 games.append({
                     'title': title,
                     'game_url': game_url,

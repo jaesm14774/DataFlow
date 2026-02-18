@@ -90,6 +90,23 @@ DataFlow is designed to streamline the collection and processing of financial da
 
 ## Recent Fixes
 
+### 2025-02-18: 修復 Google Play 事前登錄遊戲抓取不全
+
+修復 `game/pre_registration.py` 中 Google Play 事前登錄遊戲抓取不全問題。
+
+**問題：**
+- `parse_search_results` 僅比對 `title in ['Pre-registration games', 'Google Play']`，搜尋結果標題可能不符
+- 部分遊戲圖片僅有 `src` 無 `srcset`，被過濾掉
+- 未處理 lazy loading，捲動後才載入的遊戲抓不到
+
+**修復方式：**
+- 新增固定 URL `GOOGLE_PLAY_PRE_REG_URL` 作為 fallback
+- `parse_search_results` 改為比對 URL 含 `promotion_3000000d51_pre_registration_games`，無匹配則用固定 URL
+- `fetch_google_play_pre_registration`：img 改為 `srcset or src`、移除 img 必填、加入捲動載入 lazy content、game_id 正確處理 `&` 後參數
+
+**影響範圍：**
+- `game/pre_registration.py` (Google Play 事前登錄收集)
+
 ### 2025-12-23: 修復 save_money TVBS_SaveMoney IndexError
 
 修復 `news_ch/news_crawler/module.py` 中 `TVBS_SaveMoney.get_article_url_from()` 方法的 `IndexError`。當網頁找不到包含 `itemListElement` 的 JSON-LD script 標籤時，列表推導式返回空列表，訪問 `[0]` 會導致錯誤。
@@ -119,7 +136,7 @@ DataFlow is designed to streamline the collection and processing of financial da
 ### 遊戲事前登陸資料表 (pre_registration)
 
 #### 資料來源
-- Google Play：透過 Google Search API 搜尋並抓取 Google Play 事前登陸頁面
+- Google Play：使用固定 URL `promotion_3000000d51_pre_registration_games`（搜尋 API 為輔，無匹配時 fallback）
 - QooApp：從 QooApp 新聞標籤頁面抓取事前登錄相關遊戲資訊（https://news.qoo-app.com/tag/%E4%BA%8B%E5%89%8D%E7%99%BB%E9%8C%84）
 
 #### 去重機制

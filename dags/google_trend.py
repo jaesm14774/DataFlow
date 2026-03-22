@@ -101,11 +101,11 @@ def search(geo,board_id,date):
 def crawler(date=datetime.datetime.now().strftime('%Y%m%d')):
     _select_col=['cid','keyword','hot_level','created_at']
     
-    print('Connected with MySQL')
+    print('[GoogleTrend] MySQL 已連線')
 
     board=get_board(engine)
 
-    print('Get google trend board : country')
+    print('[GoogleTrend] 讀取看板設定（country）')
     
     delete_count=0;insert_count=0
     try:
@@ -113,7 +113,7 @@ def crawler(date=datetime.datetime.now().strftime('%Y%m%d')):
             cid=board['cid'].iloc[i]
             country_abbrev_en_name=board['country_abbrev_en_name'].iloc[i]
             country_ch_name=board['country_ch_name'].iloc[i]
-            print(f'Now collect country is {country_abbrev_en_name}-{country_ch_name}')
+            print(f'[GoogleTrend] 收集中 | {country_abbrev_en_name}-{country_ch_name}')
 
             df=search(geo=country_abbrev_en_name,board_id=cid,date=date)  
         
@@ -139,7 +139,7 @@ def crawler(date=datetime.datetime.now().strftime('%Y%m%d')):
             df.to_sql(f'{table_name}',engine,index=False,if_exists='append')
             insert_count+=df.shape[0]
             
-            print(f'Done {country_abbrev_en_name}-{country_ch_name}')
+            print(f'[GoogleTrend] 完成 | {country_abbrev_en_name}-{country_ch_name}')
 
             time.sleep(random.randint(10,20)/10)
             
@@ -148,10 +148,10 @@ def crawler(date=datetime.datetime.now().strftime('%Y%m%d')):
         after_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]  
         log_record.set_after_count(after_count)
         log_record.success = 1
-        print('收集成功!')
+        print('[GoogleTrend] 成功')
     except Exception as e:
         log_record.raise_error(repr(e))
-        print('任務失敗')
+        print(f'[GoogleTrend] 失敗 | {type(e).__name__}: {e}')
         raise e        
     finally:
         log_record.insert_to_log_record()

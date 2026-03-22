@@ -56,7 +56,7 @@ class StockTreasuryHistoryInfoCollectProcess(StockCollectLogic):
             }
             a=self.simulate_request(event={'url':url,'data':data,
                                     'method':'post'})
-            print(a)
+            print(f'[庫藏股] 已取證交所 HTML | 長度={len(a.get("text",""))} 字元')
             twse_soup=BeautifulSoup(a['text'],'lxml')
             
             #上櫃
@@ -110,7 +110,7 @@ class StockTreasuryHistoryInfoCollectProcess(StockCollectLogic):
             R=pd.concat([twse,tpex])
             result.append(R)
             self.start_date=self.start_date+relativedelta(years=10)
-            print(self.start_date.strftime('%Y/%m/%d'),'--- ',self.now_time.strftime('%Y/%m/%d'),'庫藏股收集完成')
+            print(f'[庫藏股] 年度區間進度 | 下一輪起={self.start_date.strftime("%Y/%m/%d")} | 目標迄={self.now_time.strftime("%Y/%m/%d")}')
             time.sleep(5)
         
         result=pd.concat(result)
@@ -249,10 +249,10 @@ class StockTreasuryHistoryInfoCollectProcess(StockCollectLogic):
             self.log_process_record()
             
             self.log_record.success = 1
-            print('收集成功!')
+            print('[庫藏股] 成功')
         except Exception as e:
             self.log_record.raise_error(repr(e))
-            print('任務失敗')
+            print(f'[庫藏股] 失敗 | {type(e).__name__}: {e}')
             raise e
         finally:
             self.log_record.insert_to_log_record()
@@ -263,4 +263,4 @@ def treasury_history_collect():
     main_etl=StockTreasuryHistoryInfoCollectProcess()
     main_etl.process()
     
-    print('Done collection of treasury history record process')
+    print('[庫藏股] DAG 任務結束')

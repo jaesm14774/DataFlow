@@ -27,7 +27,7 @@ conn,cursor,engine=get_sql(connection.loc['host','value'],
 
 before_count=pd.read_sql_query(f'select count(id) as N from {table_name}',engine)['N'].iloc[0]
 log_record.set_before_count(before_count)
-print(f'PTT文章，處理前總數為 : {before_count}')
+print(f'[PTT] DB 既有文章筆數={before_count}')
 
 class PttScraper:
     board_id=''
@@ -133,7 +133,7 @@ class PttScraper:
         p = self._find_separator_position(content)
 
         if p is None:
-            print(f'Check website for unexpected format of content: {article_url}')
+            print(f'[PTT] 內文格式異常（找不到分隔行）略過 | url={article_url}')
             return pd.DataFrame(), pd.DataFrame()
 
         comment = content[p+1:]
@@ -178,7 +178,7 @@ class PttScraper:
             created_at = format(datetime.datetime.strptime(time_str, '%a %b %d %H:%M:%S %Y'), '%Y-%m-%d %H:%M:%S')
             return created_at
         except Exception as e:
-            print(e)
+            print(f'[PTT] 文章時間解析失敗 | time_str={time_str!r} | {type(e).__name__}: {e}')
             return None
 
     def _remove_metaline_elements(self, soup):
@@ -390,7 +390,7 @@ class PttScraper:
                     try:
                         article,comment=self.parse_article(article_url=url)
                     except Exception as e:
-                        print(f'Error ptt article url : {url}', '\n', e)
+                        print(f'[PTT] 單篇解析例外 | board={self.board_id} | url={url} | {type(e).__name__}: {e}')
                         continue
                     article_data.append(article)
                     comment_data.append(comment)
@@ -431,21 +431,21 @@ class PttScraper:
                 
                     self.update_table(comment_data, 'ptt_comment', 'ptt_comment_diff', ['author', 'estimate_time'])
                 
-                print(f'Done crawler ptt board : {self.board_id}')
+                print(f'[PTT] 看板完成 | board={self.board_id}')
             
             log_record.set_delete_count(self.delete_count)
-            print(f'PTT 刪除資料筆數 : {self.delete_count}')
+            print(f'[PTT] 刪除筆數={self.delete_count}')
             log_record.set_insert_count(self.insert_count)
-            print(f'PTT 新增資料筆數 : {self.insert_count}')
+            print(f'[PTT] 新增筆數={self.insert_count}')
             after_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]  
             log_record.set_after_count(after_count)
             log_record.success = 1
             
-            print(f'PTT 爬蟲後筆數 : {after_count}')
-            print('收集成功!')
+            print(f'[PTT] 寫入後總筆數={after_count}')
+            print('[PTT] 成功')
         except Exception as e:
             log_record.raise_error(repr(e))
-            print('任務失敗')
+            print(f'[PTT] 失敗 | {type(e).__name__}: {e}')
             raise e        
         finally:
             log_record.insert_to_log_record()

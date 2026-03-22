@@ -49,7 +49,7 @@ def Notify():
 
     board_map_dict=get_board_map(engine)
 
-    print('Get active status of board.')
+    print('[GoogleTrend通知] 查詢啟用中看板')
 
     google=pd.read_sql_query('select * from hot_search where notify=0',engine)
 
@@ -57,7 +57,7 @@ def Notify():
 
     google=google[~google.duplicated(subset=['keyword'])]
 
-    print('Get unnotified article.')
+    print('[GoogleTrend通知] 查詢未通知文章')
 
     for b in board_map_dict:
         temp=google[google.cid == b]
@@ -85,12 +85,12 @@ def Notify():
     
     cursor.execute('update hot_search set notify=1 where id in %s' % str(tuple(all_id)))
     
-    print('Article of notification is updated.')
+    print('[GoogleTrend通知] 已更新通知狀態')
     
     conn.commit()
     conn.close()
 
-    print('All done!')
+    print('[GoogleTrend通知] 全部完成')
 
 with DAG(
     dag_id='google_daily_trend_notify',

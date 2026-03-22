@@ -41,7 +41,7 @@ def collect_holiday_taiwan():
     data=[]
     
     while True:
-        print(f'Now collect start_page = {start_page}')
+        print(f'[假日API] 抓取頁碼 start_page={start_page}')
         url=f'https://data.ntpc.gov.tw/api/datasets/308DCD75-6434-45BC-A95F-584DA4FED251/json?page={start_page}&size=1000'
         response=requests.get(url, timeout=20).json()
         

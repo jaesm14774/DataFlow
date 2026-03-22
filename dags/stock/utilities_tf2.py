@@ -5,7 +5,7 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, BatchNormalization, Flatten, Dropout, Dense
 
 def create_cnn_model(width, height, allowedChars, num_digit):
-    print('Creating CNN model with TensorFlow 2.16.2...')
+    print('[驗證碼CNN] 建立 TensorFlow 2.16.2 模型…')
     tensor_in = Input((height, width, 3), name='input_layer')
 
     tensor_out = tensor_in

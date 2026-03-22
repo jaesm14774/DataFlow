@@ -405,7 +405,7 @@ class StockCalculateOuterAndInvestmentRecommendationProcess(StockCalculateLogic)
             out.append(o)
             investment.append(inv)
             
-            print(f'外投本比回測-{tt} is done and remaining {len(List)}')
+            print(f'[外投本比回測] 完成一段 | 區間={tt} | 剩餘={len(List)-i-1}')
         
         self.out=[s for s in out if isinstance(s,pd.DataFrame)]
         self.investment=[s for s in investment if isinstance(s,pd.DataFrame)]
@@ -532,8 +532,7 @@ class StockCalculateBrokerRecommendationProcess(StockCalculateLogic):
             for broker_name in rs1:
                 if self.geo_broker_info[np.logical_and(self.geo_broker_info['券商名稱']==broker_name,
                                                        self.geo_broker_info['證券代號'] == code)].距離.iloc[0]<threshold:
-                    print(code,broker_name,self.geo_broker_info[np.logical_and(self.geo_broker_info['券商名稱']==broker_name,
-                                                                     self.geo_broker_info['證券代號'] == code)].距離.iloc[0],' 買')
+                    print(f'[地緣券商-當日] 買 | 代號={code} 券商={broker_name} 距離={self.geo_broker_info[np.logical_and(self.geo_broker_info["券商名稱"]==broker_name,self.geo_broker_info["證券代號"] == code)].距離.iloc[0]}')
                                        
                     self.recommend.append(pd.DataFrame({
                         '資料日期':buy_r.資料日期.iloc[0],
@@ -553,8 +552,7 @@ class StockCalculateBrokerRecommendationProcess(StockCalculateLogic):
             for broker_name in rs2:
                 if self.geo_broker_info[np.logical_and(self.geo_broker_info['券商名稱']==broker_name,
                                                        self.geo_broker_info['證券代號'] == code)].距離.iloc[0]<threshold:
-                    print(code,broker_name,self.geo_broker_info[np.logical_and(self.geo_broker_info['券商名稱']==broker_name,
-                                                                               self.geo_broker_info['證券代號'] == code)].距離.iloc[0],' 賣')
+                    print(f'[地緣券商-當日] 賣 | 代號={code} 券商={broker_name} 距離={self.geo_broker_info[np.logical_and(self.geo_broker_info["券商名稱"]==broker_name,self.geo_broker_info["證券代號"] == code)].距離.iloc[0]}')
                     self.recommend.append(pd.DataFrame({
                         '資料日期':sell_r.資料日期.iloc[0],
                         '證券代號':code,
@@ -759,9 +757,7 @@ class StockCalculateBrokerTenDaysRecommendationProcess(StockCalculateLogic):
             for broker_name in rs1:
                 if self.geo_broker_info[np.logical_and(self.geo_broker_info['券商名稱']==broker_name,
                                                        self.geo_broker_info['證券代號'] == code)].距離.iloc[0]<threshold:
-                    print(code,broker_name,self.geo_broker_info[np.logical_and(self.geo_broker_info['券商名稱']==broker_name,
-                                                                self.geo_broker_info['證券代號'] == code)].距離.iloc[0],
-                          ' 買')
+                    print(f'[地緣券商-N日] 買 | 代號={code} 券商={broker_name} 距離={self.geo_broker_info[np.logical_and(self.geo_broker_info["券商名稱"]==broker_name,self.geo_broker_info["證券代號"] == code)].距離.iloc[0]}')
                     self.recommend.append(pd.DataFrame({
                         '資料日期':buy_r.資料日期.iloc[0],
                         '證券代號':code,
@@ -780,9 +776,7 @@ class StockCalculateBrokerTenDaysRecommendationProcess(StockCalculateLogic):
             for broker_name in rs2:
                 if self.geo_broker_info[np.logical_and(self.geo_broker_info['券商名稱']==broker_name,
                                                        self.geo_broker_info['證券代號'] == code)].距離.iloc[0]<threshold:
-                    print(code,broker_name,self.geo_broker_info[np.logical_and(self.geo_broker_info['券商名稱']==broker_name,
-                                                                               self.geo_broker_info['證券代號'] == code)].距離.iloc[0],
-                          ' 賣')
+                    print(f'[地緣券商-N日] 賣 | 代號={code} 券商={broker_name} 距離={self.geo_broker_info[np.logical_and(self.geo_broker_info["券商名稱"]==broker_name,self.geo_broker_info["證券代號"] == code)].距離.iloc[0]}')
                     self.recommend.append(pd.DataFrame({
                         '資料日期':sell_r.資料日期.iloc[0],
                         '證券代號':code,
@@ -818,7 +812,7 @@ class StockCalculateBrokerTenDaysRecommendationProcess(StockCalculateLogic):
         st=time.time()
         rs=d.groupby(['證券代號','券商名稱']).apply(self.combine_N_days_into_one).reset_index(drop=True)
         rs['資料日期']=self.List_Interval[0]
-        print(f'地緣券商多日計算花費時間  : {time.time()-st} seconds')
+        print(f'[地緣券商-十日] 聚合計算耗時={time.time()-st:.1f}s')
         rs.to_sql('券商進出_十日',self.engine,if_exists='append',index=0)
         
     def load_and_view(self,today):
@@ -851,7 +845,7 @@ class StockCalculateBrokerTenDaysRecommendationProcess(StockCalculateLogic):
         
         self.List_Interval=List[:self.N]
         
-        print('List:',List)
+        print(f'[地緣券商-十日] 待回測日期列表（共 {len(List)} 個）={List[:5]}{"…" if len(List)>5 else ""}')
         #地緣10推薦回測
         RS=[]
 
@@ -1025,9 +1019,9 @@ class StockMakeOuterAndInvestmentRecommendationListProcess(StockCalculateLogic):
                     continue
             
             if len(rs)>0:
-                print('新鮮麵包出爐囉~~~')
+                print(f'[觀察清單-外投本] 新進榜 | 代號={rs} | 資料日={before_today_df.資料日期.iloc[-1]}')
                 if format(datetime.datetime.now(),'%Y-%m-%d') != before_today_df.資料日期.astype('str').iloc[-1]:
-                    print('\n\n\n','強烈注意，這不是今天的結果')
+                    print('[觀察清單-外投本] 警告：最新一筆資料日非今日（回測或 DB 延遲）')
                 
                 return pd.DataFrame({
                     '資料日期':before_today_df.資料日期.iloc[-1],
@@ -1156,9 +1150,9 @@ class StockMakeBrokerInOutRecommendationListProcess(StockCalculateLogic):
                     continue
             
             if len(rs)>0:
-                print('新鮮麵包出爐囉~~~')
+                print(f'[觀察清單-地緣] 新進榜 | 代號={rs} | 資料日={before_today_df.資料日期.iloc[-1]}')
                 if format(datetime.datetime.now(),'%Y-%m-%d') != before_today_df.資料日期.astype('str').iloc[-1]:
-                    print('\n\n\n','強烈注意，這不是今天的結果')
+                    print('[觀察清單-地緣] 警告：最新一筆資料日非今日（回測或 DB 延遲）')
                 
                 return pd.DataFrame({
                     '資料日期':before_today_df.資料日期.iloc[-1],
@@ -1250,17 +1244,13 @@ class StockMakeMainForceBuySellRecommendationListProcess(StockCalculateLogic):
 
     def find_candidate(self,df,total_day,end_date,threshold,tolerate_day=1):
         if end_date not in df['資料日期'].unique():
-            print((
-                f'主力買賣超推薦-Warning:\n'
-                f'Sorry for not found {end_date},so we change end_date to {df["資料日期"].iloc[-1]}'
-                )
-            )
+            print(f'[主力買賣超推薦] 無資料日 {end_date}，改用最後可用日 {df["資料日期"].iloc[-1]}')
             end_date=df['資料日期'].iloc[-1]
         
         before_day=df[df.資料日期 <= end_date]['資料日期'].unique()
         
         if len(before_day)<total_day:
-            print('主力買賣超推薦 total_day is larger than amount of data: error!')
+            print(f'[主力買賣超推薦] 資料天數不足 | 需要={total_day} 實際={len(before_day)}（無法計算窗口）')
             return None
         else:
             choose_date_interval=np.sort(before_day)[-total_day:]

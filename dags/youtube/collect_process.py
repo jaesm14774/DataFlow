@@ -26,7 +26,7 @@ conn,cursor,engine=get_sql(connection.loc['host','value'],
 
 before_count=pd.read_sql_query(f'select count(id) as N from {table_name}',engine)['N'].iloc[0]
 log_record.set_before_count(before_count)
-print(f'Youtube影片，處理前總數為 : {before_count}')
+print(f'[Youtube] DB 既有影片筆數={before_count}')
 
 youtube_key_list=pd.read_csv(youtube_token_path)['token'].tolist()
 
@@ -63,7 +63,7 @@ class YoutubeCrawler():
         self.n_query=self.n_query+1
         
         if a['pageInfo']['totalResults'] == 0:
-            print(f'Not find any channel for channel id = {channel_id}')
+            print(f'[Youtube] API 查無頻道（ID 錯誤或已刪）| channel_id={channel_id}')
         elif a['pageInfo']['totalResults'] == 1:
             #channel basic info
 
@@ -600,7 +600,7 @@ class YoutubeCrawler():
                     else:
                         cc=[]
                 
-                print(f'Done of collecting {name} and total query_cost : {self.n_query} at this times.')
+                print(f'[Youtube] 頻道完成 | name={name} | 本輪 API 次數={self.n_query}')
 
                 if len(channel_info)>0:
                     channel_info=channel_info.reset_index(drop=True)
@@ -653,18 +653,18 @@ class YoutubeCrawler():
                 time.sleep(5)
             
             log_record.set_delete_count(self.delete_count)
-            print(f'Youtube 刪除資料筆數 : {self.delete_count}')
+            print(f'[Youtube] 刪除筆數={self.delete_count}')
             log_record.set_insert_count(self.insert_count)
-            print(f'Youtube 新增資料筆數 : {self.insert_count}')
+            print(f'[Youtube] 新增筆數={self.insert_count}')
             after_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]  
             log_record.set_after_count(after_count)
             log_record.success = 1
             
-            print(f'Youtube 爬蟲後筆數 : {after_count}')
-            print('收集成功!')
+            print(f'[Youtube] 寫入後總筆數={after_count}')
+            print('[Youtube] 成功')
         except Exception as e:
             log_record.raise_error(repr(e))
-            print('任務失敗')
+            print(f'[Youtube] 失敗 | {type(e).__name__}: {e}')
             raise e        
         finally:
             log_record.insert_to_log_record()

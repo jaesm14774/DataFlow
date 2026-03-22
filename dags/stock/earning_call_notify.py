@@ -76,7 +76,7 @@ class StockEarningCallCollectProcess(StockCollectLogic):
             df.append(self.get_earnings_call(roc_year,roc_month))
             time.sleep(5)
             
-            print(f'完成 {roc_time} 法說會收集')
+            print(f'[法說會通知] 已收 {roc_time} 區間')
             
         result=pd.concat(df)
         result=result[~result.duplicated(subset=['資料日期','證券代號'])]
@@ -167,10 +167,10 @@ class StockEarningCallCollectProcess(StockCollectLogic):
             self.log_process_record()
             
             self.log_record.success = 1
-            print('收集成功!')
+            print('[法說會通知] 成功')
         except Exception as e:
             self.log_record.raise_error(repr(e))
-            print('任務失敗')
+            print(f'[法說會通知] 失敗 | {type(e).__name__}: {e}')
             raise e
         finally:
             self.log_record.insert_to_log_record()
@@ -183,4 +183,4 @@ def earning_call_collect():
     main_etl=StockEarningCallCollectProcess()
     main_etl.process()
     
-    print('Done collection of stock earnning call process')
+    print('[法說會通知] DAG 任務結束')

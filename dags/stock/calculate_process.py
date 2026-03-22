@@ -9,7 +9,7 @@ def calculate_outer_and_investment_ratio():
         main_etl=StockCalculateOuterAndInvestmentRationProcess()
         main_etl.process()
     
-    print('Done calculateion of outer_and_investment_ratio process')
+    print('[stock 計算] 外投本比計算任務結束')
 
 #計算外投本比回測
 def calculate_outer_and_investment_recommendation():
@@ -17,7 +17,7 @@ def calculate_outer_and_investment_recommendation():
         main_etl=StockCalculateOuterAndInvestmentRecommendationProcess()
         main_etl.process()
     
-    print('Done calculateion of outer_and_investment_recommendation process')
+    print('[stock 計算] 外投本比回測任務結束')
 
 #計算當日地緣券商回測
 @task_wrapper
@@ -26,7 +26,7 @@ def calculate_broker_recommendation():
         main_etl=StockCalculateBrokerRecommendationProcess()
         main_etl.process()
     
-    print('Done calculateion of calculate_broker_recommendation process')
+    print('[stock 計算] 地緣券商當日回測任務結束')
 
 #計算十日地緣券商回測
 @task_wrapper
@@ -35,7 +35,7 @@ def calculate_broker_ten_days_recommendation():
         main_etl=StockCalculateBrokerTenDaysRecommendationProcess()
         main_etl.process()
     
-    print('Done calculateion of calculate_broker_ten_days_recommendation process')
+    print('[stock 計算] 地緣券商十日回測任務結束')
 
 #外本比推薦名單
 def make_outer_and_investment_recommendation_list():
@@ -43,7 +43,7 @@ def make_outer_and_investment_recommendation_list():
         main_etl=StockMakeOuterAndInvestmentRecommendationListProcess()
         main_etl.process()
         
-    print('Done calculateion of make_outer_and_investment_recommendation_list process')
+    print('[stock 計算] 外投本推薦名單任務結束')
 
 #地緣券商推薦名單
 @task_wrapper
@@ -52,7 +52,7 @@ def make_broker_inout_recommendation_list():
         main_etl=StockMakeBrokerInOutRecommendationListProcess()
         main_etl.process()
         
-    print('Done calculateion of make_broker_inout_recommendation_list process')
+    print('[stock 計算] 地緣券商推薦名單任務結束')
 
 #計算主力買賣超
 def calculate_mainforce_buy_sell():
@@ -60,7 +60,7 @@ def calculate_mainforce_buy_sell():
         main_etl=StockCalculateMainForceBuySellProcess()
         main_etl.process()
     
-    print('Done calculateion of calculate_mainforce_buy_sell process')
+    print('[stock 計算] 主力買賣超計算任務結束')
     
 #主力買賣超推薦名單
 def make_mainforce_buy_sell_recommendation_list():
@@ -68,7 +68,7 @@ def make_mainforce_buy_sell_recommendation_list():
         main_etl=StockMakeMainForceBuySellRecommendationListProcess()
         main_etl.process()
         
-    print('Done calculateion of make_mainforce_buy_sell_recommendation_list process')
+    print('[stock 計算] 主力買賣超推薦名單任務結束')
     
 #其他地緣券商推薦名單
 @task_wrapper
@@ -77,7 +77,7 @@ def make_another_broker_inout_recommendation_list():
         main_etl=StockMakeAnotherBrokerInOutRecommendationListProcess()
         main_etl.process()
         
-    print('Done calculateion of make_another_broker_inout_recommendation_list process')
+    print('[stock 計算] 另一組地緣券商推薦任務結束')
     
  #外投本比累積推薦名單
 def make_outer_and_investment_cumulate_recommendation_list():
@@ -85,7 +85,7 @@ def make_outer_and_investment_cumulate_recommendation_list():
         main_etl=StockMakeOuterAndInvestmentCumulateRecommendationListProcess()
         main_etl.process()
         
-    print('Done calculateion of make_outer_and_investment_cumulate_recommendation_list process')   
+    print('[stock 計算] 外投本累積推薦名單任務結束')   
     
  #大戶比累積推薦名單
 def make_major_holder_recommendation_list():
@@ -93,7 +93,7 @@ def make_major_holder_recommendation_list():
         main_etl=StockMajorHolderRecommendationListProcess()
         main_etl.process()
         
-    print('Done calculateion of make_major_holder_recommendation_list process')   
+    print('[stock 計算] 大戶比推薦名單任務結束')   
     
  #融資融券推薦名單
 def make_margin_trade_recommendation_list():
@@ -101,7 +101,7 @@ def make_margin_trade_recommendation_list():
         main_etl=StockMarginTradeRecommendationListProcess()
         main_etl.process()
         
-    print('Done calculateion of make_margin_trade_recommendation_list process')
+    print('[stock 計算] 融資融券推薦名單任務結束')
 
  #月營收資訊推薦名單
 def make_month_revenue_recommendation_list():
@@ -109,4 +109,4 @@ def make_month_revenue_recommendation_list():
         main_etl=StockMonthRevenueRecommendationListProcess()
         main_etl.process()
         
-    print('Done calculateion of make_month_revenue_recommendation_list process')
+    print('[stock 計算] 月營收推薦名單任務結束')

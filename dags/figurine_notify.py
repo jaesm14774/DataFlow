@@ -128,7 +128,7 @@ def search_key(x,key_word=['星之卡比','卡比','耿鬼']):
         else:
             return False        
     else:
-        print('Key_word only uses in list, array, or string.')
+        print('[公仔通知] key_word 須為 list、tuple 或 str')
         raise RuntimeError('')
 
 #truncate insert (overwrite)
@@ -159,10 +159,10 @@ def collect_data(session, shop_id=11664018):
         after_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]  
         log_record.set_after_count(after_count)
         log_record.success = 1
-        print('收集成功!')
+        print('[公仔通知] 成功')
     except Exception as e:
         log_record.raise_error(repr(e))
-        print('任務失敗')
+        print(f'[公仔通知] 失敗 | {type(e).__name__}: {e}')
         raise e        
     finally:
         log_record.insert_to_log_record()
@@ -179,7 +179,7 @@ def notification(session):
         temp=data[data.name.apply(search_key)]
         
         if temp.shape[0] ==0:
-            print('All Done!')
+            print('[公仔通知] 全部完成')
         else:
             last_index=glob.glob(image_path+'*.jpg')
             
@@ -206,7 +206,7 @@ def notification(session):
             
             temp.loc[:,_key_col].to_sql('figurine_notified',engine,index=0,if_exists='append')
             
-            print('All Done!')
+            print('[公仔通知] 全部完成')
             
             
 with DAG(

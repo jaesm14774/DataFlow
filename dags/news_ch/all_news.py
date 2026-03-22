@@ -47,7 +47,7 @@ conn,cursor,engine=get_sql(connection.loc['host','value'],
 
 before_count=pd.read_sql_query(f'select count(id) as N from {table_name}',engine)['N'].iloc[0]
 log_record.set_before_count(before_count)
-print(f'中文新聞，處理前總數為 : {before_count}')
+print(f'[中文新聞] DB 既有筆數={before_count}')
 
 def is_valid_url(url):
     """
@@ -99,11 +99,11 @@ def collect_article_url(conn,cursor,engine,log_record):
         TEMP=TEMP.reset_index(drop=True)
         
         TEMP.to_sql('article_url',engine,index=False,if_exists='append')
-        print('成功收集中文新聞網址')
+        print('[中文新聞] 各站列表網址已寫入 article_url')
     except Exception as e:
         log_record.raise_error(repr(e))
         log_record.insert_to_log_record()
-        print('任務失敗')
+        print(f'[中文新聞] 收網址失敗 | {type(e).__name__}: {e}')
         raise e
 
     # collect_news(conn,cursor,engine,log_record)
@@ -174,10 +174,10 @@ def collect_news(conn,cursor,engine,log_record):
 
         for index, row in TEMP.iterrows():
             try:
-                print(f'collecting url : {row["article_url"]}')
+                print(f'[中文新聞] 解析文章 | url={row["article_url"]}')
                 D_temp.append(get_info(article_url=row["article_url"], category=row["category"], tim=row["created_at"], source=row["source"], img=row["img"], keyword=row["keyword"]))
             except Exception as e:
-                print(e)
+                print(f'[中文新聞] 單篇略過 | url={row["article_url"]} | {type(e).__name__}: {e}')
                 continue
         
         D_temp=pd.concat(D_temp,axis=0)
@@ -214,7 +214,7 @@ def collect_news(conn,cursor,engine,log_record):
     except Exception as e:
         log_record.raise_error(repr(e))
         log_record.insert_to_log_record()
-        print('任務失敗')
+        print(f'[中文新聞] 解析批次失敗 | {type(e).__name__}: {e}')
         raise e   
     
     conn.close()
@@ -243,23 +243,23 @@ def delete_and_insert(conn,cursor,engine,log_record):
         conn.commit()
 
         log_record.set_delete_count(delete_count)
-        print(f'中文新聞 刪除資料筆數 : {delete_count}')
+        print(f'[中文新聞] 刪除筆數={delete_count}（舊文重寫）')
         
         D_temp=pd.read_sql_query('select * from news_temp',engine)
         D_temp.to_sql('news',engine,index=False,if_exists='append')
         
         log_record.set_insert_count(D_temp.shape[0])
-        print(f'中文新聞 新增資料筆數 : {D_temp.shape[0]}')
+        print(f'[中文新聞] 新增筆數={D_temp.shape[0]}')
         
         after_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]  
         log_record.set_after_count(after_count)
         log_record.success = 1
         
-        print(f'中文新聞，爬蟲後筆數 : {after_count}')
-        print('收集成功!')
+        print(f'[中文新聞] 寫入後總筆數={after_count}')
+        print('[中文新聞] 成功')
     except Exception as e:
         log_record.raise_error(repr(e))
-        print('任務失敗')
+        print(f'[中文新聞] 失敗 | {type(e).__name__}: {e}')
         raise e        
     finally:
         log_record.insert_to_log_record()

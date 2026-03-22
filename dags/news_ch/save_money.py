@@ -36,7 +36,7 @@ conn,cursor,engine=get_sql(connection.loc['host','value'],
 
 before_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]
 log_record.set_before_count(before_count)
-print(f'中文優惠情報，處理前總數為 : {before_count}')
+print(f'[優惠情報] DB 既有筆數={before_count}')
 
 
 #news ch notify
@@ -73,7 +73,7 @@ def collect_news(conn,cursor,engine,log_record):
     except Exception as e:
         log_record.raise_error(repr(e))
         log_record.insert_to_log_record()
-        print('任務失敗')
+        print(f'[優惠情報] 收集失敗 | {type(e).__name__}: {e}')
         raise e        
 
 def delete_and_insert(conn,cursor,engine,log_record):
@@ -91,23 +91,23 @@ def delete_and_insert(conn,cursor,engine,log_record):
         conn.commit()
 
         log_record.set_delete_count(delete_count)
-        print(f'中文優惠情報 刪除資料筆數 : {delete_count}')
+        print(f'[優惠情報] 刪除筆數={delete_count}')
         
         D_temp=pd.read_sql_query(f'select * from {table_name}_temp',engine)
         D_temp.to_sql(table_name,engine,index=False,if_exists='append')
         
         log_record.set_insert_count(D_temp.shape[0])
-        print(f'中文優惠情報 新增資料筆數 : {D_temp.shape[0]}')
+        print(f'[優惠情報] 新增筆數={D_temp.shape[0]}')
         
         after_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]  
         log_record.set_after_count(after_count)
         log_record.success = 1
         
-        print(f'中文優惠情報，爬蟲後筆數 : {after_count}')
-        print('收集成功!')
+        print(f'[優惠情報] 寫入後總筆數={after_count}')
+        print('[優惠情報] 成功')
     except Exception as e:
         log_record.raise_error(repr(e))
-        print('任務失敗')
+        print(f'[優惠情報] 失敗 | {type(e).__name__}: {e}')
         raise e        
     finally:
         log_record.insert_to_log_record()
@@ -130,7 +130,7 @@ def notification(conn,cursor,engine):
     
     select_df=pd.read_sql_query(select_sql_query,engine).reset_index(drop=True)
     
-    print(f'這次的中文優惠情報通知共有 {select_df.shape[0]}篇')
+    print(f'[優惠情報] 待通知篇數={select_df.shape[0]}')
     
     select_df.loc[:,_key_columns].to_sql(notification_table_name,engine,index=0,if_exists='append')
         
@@ -138,4 +138,4 @@ def notification(conn,cursor,engine):
         save_money_ch_notify.notify(msg=str(select_df.source.iloc[i])+'\n'+str(select_df.created_at.iloc[i])+':'+select_df.title.iloc[i]+'\n'+select_df.brief_content.iloc[i])
         save_money_ch_notify.notify(msg=select_df.article_url.iloc[i])
     
-    print('中文優惠情報 通知完成')
+    print('[優惠情報] Discord 通知已送出')

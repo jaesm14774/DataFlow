@@ -65,7 +65,7 @@ def notification():
     #關閉連線
     conn.close()
     engine.dispose()
-    print('Bug notify is all done!')
+    print('[Django bug] Discord 通知已送出')
 
 
 with DAG(

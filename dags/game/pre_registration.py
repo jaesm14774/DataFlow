@@ -292,7 +292,7 @@ def write_to_sql(**kwargs):
             
             if not new_df.empty:
                 new_df.to_sql(table_name, con=engine, if_exists='append', index=False)
-                new_df.to_sql(f'{table_name}_tmp', con=engine, if_exists='replace', index=False)
+            new_df.to_sql(f'{table_name}_tmp', con=engine, if_exists='replace', index=False)
         
         log_record.set_insert_count(len(new_df))
         log_record.set_delete_count(0)

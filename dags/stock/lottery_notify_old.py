@@ -217,10 +217,10 @@ class StockLotteryCollectProcess(StockCollectLogic):
             self.log_process_record()
             
             self.log_record.success = 1
-            print('收集成功!')
+            print('[樂透通知-old] 成功')
         except Exception as e:
             self.log_record.raise_error(repr(e))
-            print('任務失敗')
+            print(f'[樂透通知-old] 失敗 | {type(e).__name__}: {e}')
             raise e
         finally:
             self.log_record.insert_to_log_record()

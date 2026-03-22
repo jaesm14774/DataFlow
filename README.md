@@ -88,7 +88,52 @@ DataFlow is designed to streamline the collection and processing of financial da
 - MySQL database
 - Chrome browser (for Selenium-based crawling)
 
+## DAG 執行日誌慣例
+
+- 任務內 `print` 盡量帶 **`[模組或流程名]`** 前綴（例如 `[中文新聞]`、`[stock DAG]`），方便在 Airflow log 搜尋與對照任務。
+- **失敗**時除訊息外會標出 **Python 例外類型**（如 `KeyError`、`ConnectionError`），便於區分是網頁改版、連線或資料問題。
+
+## 股票資料回補 (Backfill)
+
+當需要回補特定日期的股票資料時，修改 `dags/stock/config/config.py` 中的 `BACKFILL_DATE`：
+
+```python
+# 設定要回補的日期
+BACKFILL_DATE = '2026-03-16'
+```
+
+**操作步驟：**
+1. 設定 `BACKFILL_DATE` 為目標日期（格式 `YYYY-MM-DD`）
+2. 在 Airflow UI 手動觸發股票收集 DAG
+3. 等待 DAG 完成後，修改為下一個日期，再次觸發
+4. 全部回補完成後，將 `BACKFILL_DATE` 改回 `None` 恢復正常排程
+
+**影響範圍：**
+- `StockCollectLogic.now_time`：三大法人、個股成交等收集 API 的日期參數
+- `is_taiwan_stock_close`：開盤日判斷
+- `is_weekend`：週六才執行的任務（大戶比、融資券、月營收）
+
+**注意事項：**
+- 回補日若為假日，`is_taiwan_stock_close` 會跳過該日
+- 依賴 `really_date`（從 DB 查最新三大法人日期）的任務，會在三大法人資料寫入後自動取得正確日期
+- 回補完畢務必改回 `BACKFILL_DATE = None`
+
 ## Recent Fixes
+
+### 2026-03-21: DAG 日誌優化與月營收重試修正
+
+- **日誌：** 調整 `dags/` 內多數 `print` 為簡短中文說明並帶前綴；錯誤時輸出例外類型與訊息。
+- **Bug：** `StockMonthRevenueCollectProcess.collect` 在錯誤重試迴圈中誤呼叫 `get_margin_data`（融資券），已改為 `get_month_revenue`，否則重試無法補齊月營收。
+
+### 2025-02-20: 修復事前登錄遊戲重複通知
+
+修復 `game/pre_registration.py` 中 `pre_registration_tmp` 未在無新遊戲時清空，導致每次 DAG 執行都重複發送相同遊戲通知。
+
+**問題：** `write_to_sql` 僅在 `new_df` 非空時才更新 `pre_registration_tmp`，無新遊戲時 tmp 保留上次資料，`notify_new_games` 每次讀取 tmp 都會重複通知。
+
+**修復方式：** 將 `pre_registration_tmp` 的更新移出 `if not new_df.empty` 區塊，無論有無新遊戲都執行 `replace`，無新遊戲時以空表覆蓋 tmp。
+
+**影響範圍：** `game/pre_registration.py` (write_to_sql)
 
 ### 2025-02-18: 修復 Google Play 事前登錄遊戲抓取不全
 

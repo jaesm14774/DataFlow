@@ -104,7 +104,7 @@ def get_song_url_data():
     while tt != end_month:
         df.append(get_song_from_month(tt))
         
-        print(f'Done crawler of song --- {tt}')
+        print(f'[歌曲] 來源完成 | {tt}')
         tt=format(datetime.datetime.strptime(tt,'%Y-%m')+relativedelta(months=1),'%Y-%m')
 
     df=pd.concat(df)
@@ -245,7 +245,7 @@ def get_song_content_and_delete_insert():
     rs=[]
     for i in range(0,df.shape[0]):
         rs.append(get_song_info(df.song_url.iloc[i]))
-        print(f'{i}th song collect.')
+        print(f'[歌曲] 收集中 | 第 {i} 首')
 
     rs=pd.concat(rs)
     rs=rs[rs.content != ' ']
@@ -271,10 +271,10 @@ def get_song_content_and_delete_insert():
         after_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]  
         log_record.set_after_count(after_count)
         log_record.success = 1
-        print('收集成功!')
+        print('[歌曲] 成功')
     except Exception as e:
         log_record.raise_error(repr(e))
-        print('任務失敗')
+        print(f'[歌曲] 失敗 | {type(e).__name__}: {e}')
         raise e        
     finally:
         log_record.insert_to_log_record()

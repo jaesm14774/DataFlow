@@ -67,14 +67,14 @@ class TheNewsLens(NewsLogic):
             title=soup.find('h1').text
             title=re.sub(string=title,pattern=r'^\s+|\s+$|\u3000|\xa0',repl='')
         except:
-            print('Can not find title for url: '+article_url)
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
             title=' '
 
         try:
             category=soup.find(class_=re.compile('article.*-box')).find(class_=re.compile('d-inline|cate')).text
             category=category.strip()
         except:
-            print('Can not find category for url: '+article_url)
+            print(f'[中文新聞] 缺少 category | url={article_url}')
             category=' '
 
         try:
@@ -82,13 +82,13 @@ class TheNewsLens(NewsLogic):
 
             created_at=tim
         except:
-            print('Can not find dt_publish for url: '+article_url)
+            print(f'[中文新聞] 時間欄位無法解析 | url={article_url}')
             created_at=None
 
         try:
             author=soup.find(class_=re.compile('author-name')).text.strip()
         except:
-            print('Can not find author for url: '+article_url)
+            print(f'[中文新聞] 缺少 author | url={article_url}')
             author=' '
 
         for s in soup.find_all(re.compile('img|figure|script')):
@@ -102,7 +102,7 @@ class TheNewsLens(NewsLogic):
         try:
             content='\n'.join([s.text for s in soup.find(class_='article-content').find_all('p')])
         except:
-            print('Can not find content for url: '+article_url)
+            print(f'[中文新聞] 缺少 content | url={article_url}')
             content=' '    
 
         content=summary+'\n\n\n\n\n'+content
@@ -191,7 +191,7 @@ class Anue(NewsLogic):
             title=soup.find('h1').text
             title=re.sub(string=title,pattern=r'\u3000|\xa0|^\s+|\s+$',repl='')
         except:
-            print('Can not find title for url: '+article_url)
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
             title=' '
         
         created_at=tim
@@ -200,7 +200,7 @@ class Anue(NewsLogic):
             author=soup.find(class_='alr4vq1').text
             author=re.sub(string=author,pattern='鉅亨網|記者',repl='').strip()
         except:
-            print('Can not find author for url: '+article_url)
+            print(f'[中文新聞] 缺少 author | url={article_url}')
             author=' '
         
         try:
@@ -210,7 +210,7 @@ class Anue(NewsLogic):
                 content=content+s.text+'\n'
             content=re.sub(pattern=r'\n+$|^\n+',repl='',string=content)
         except:
-            print('Can not find content for url: '+article_url)
+            print(f'[中文新聞] 缺少 content | url={article_url}')
             content=' '
         
         #keyword
@@ -219,7 +219,7 @@ class Anue(NewsLogic):
             keyword=';'.join(keyword)
         except:
             keyword=' '
-            print('Can not find keyword for url: '+article_url)
+            print(f'[中文新聞] 缺少 keyword | url={article_url}')
 
         article_id=re.search(string=article_url,pattern=r'id/(\d+)').group(1)
 
@@ -229,7 +229,7 @@ class Anue(NewsLogic):
             category=soup.find('title').text.split('|')[1].split('-')[1].strip()
         except:
             category=''
-            print('Can not find category for url: '+article_url)
+            print(f'[中文新聞] 缺少 category | url={article_url}')
 
         D_temp=pd.DataFrame({
             'article_id':article_id,
@@ -300,7 +300,7 @@ class Apple(NewsLogic):
         try:
             title=soup.find('h1').text.strip()
         except:
-            print('Can not find title for url: '+article_url)
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
             title=' '
         
         #keyword
@@ -308,14 +308,14 @@ class Apple(NewsLogic):
             keyword=[s.text.strip() for s in soup.find(class_='tags-container').find_all('a')]
             keyword=';'.join(keyword)
         except:
-            print('Can not find keyword for url: '+article_url)
+            print(f'[中文新聞] 缺少 keyword | url={article_url}')
             keyword=' '
 
         #category
         try:
             category=soup.find(class_='section-name-container-underscore').text.strip()
         except:
-            print('Can not find category for url: '+article_url)
+            print(f'[中文新聞] 缺少 category | url={article_url}')
             category=' '
 
         created_at=tim
@@ -332,7 +332,7 @@ class Apple(NewsLogic):
 
             content='\n'.join(content.split('熱門新聞：')).strip()
         except:
-            print('Can not find content for url: '+article_url)
+            print(f'[中文新聞] 缺少 content | url={article_url}')
             content=' '
 
         try:
@@ -346,7 +346,7 @@ class Apple(NewsLogic):
 
             content=content.replace(author,'').strip()
         except:
-            print('Can not find author for url: '+article_url)
+            print(f'[中文新聞] 缺少 author | url={article_url}')
             author=' ' 
 
         #article_id
@@ -414,7 +414,7 @@ class NewTalk(NewsLogic):
             title=soup.find('h1').text
         except:
             title=' '
-            print('Can not find title for url: '+article_url)     
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')     
 
         created_at=tim.replace('.','-')
 
@@ -424,13 +424,13 @@ class NewTalk(NewsLogic):
             keyword=';'.join([s.text for s in soup.find(class_='tags').find_all('a')[1:]])
         except:
             keyword=' '
-            print('Can not find keyword for url: '+article_url) 
+            print(f'[中文新聞] 缺少 keyword | url={article_url}') 
 
         try:
             author=soup.find(class_='content_reporter').text.strip()
         except:
             author=' '
-            print('Can not find author for url: '+article_url) 
+            print(f'[中文新聞] 缺少 author | url={article_url}') 
 
         #去除script，有偷藏一個在article content裡，不抓圖片解說文字
         soup.find('div',{'itemprop':'articleBody'}).find('script').decompose()
@@ -442,7 +442,7 @@ class NewTalk(NewsLogic):
             content='\n'.join([s.text.strip() for s in soup.find('div',{'itemprop':'articleBody'}).find_all('p')])
         except:
             content=' '
-            print('Can not find content for url: '+article_url)
+            print(f'[中文新聞] 缺少 content | url={article_url}')
 
         article_id=re.search(string=article_url,pattern=r'view/(\d+-\d+-\d+/\d+)$').group(1)
 
@@ -492,7 +492,7 @@ class SETN(NewsLogic):
                         article_id=re.search(string=u,pattern=r'(news|News)/(\d+)\?').group(2)
                         url.append(f'{self._domain_url}/News.aspx?NewsID={article_id}&utm_source=setn.com&utm_medium=viewall&utm_campaign=viewallnews')
                     except:
-                        print(u)
+                        print(f'[中文新聞-SETN] 無法從列表 URL 解析 NewsID，略過 | url={u!r}')
                         continue
                 else:
                     url.append('https://www.setn.com'+u)
@@ -542,7 +542,7 @@ class SETN(NewsLogic):
             created_at=format(datetime.datetime.strptime(created_at,'%Y-%m-%dT%H:%M:%S+00:00'),'%Y-%m-%d %H:%M:%S')
         except:
             created_at=None
-            print(f'Error for setn created_at for url : {article_url}')
+            print(f'[中文新聞-SETN] JSON-LD 時間解析失敗 | url={article_url}')
 
         #content,author
         temp=soup.find('div',{'id':'Content1'}).find_all('p')
@@ -643,7 +643,7 @@ class PTS(NewsLogic):
             title=soup.find('h1').text
         except:
             title=' '
-            print('Can not find title for url: '+article_url)
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
         
         try:
             author=soup.find('span',class_='article-reporter').text
@@ -654,7 +654,7 @@ class PTS(NewsLogic):
                 author=' '
         except:
             author=' '
-            print('Can not find author for url: '+article_url)     
+            print(f'[中文新聞] 缺少 author | url={article_url}')     
 
         created_at=soup.find('time').text
         
@@ -668,7 +668,7 @@ class PTS(NewsLogic):
             content=re.sub(string=content,pattern='\xa0',repl='').strip()
         except:
             content=' '
-            print('Can not find content for url: '+article_url)
+            print(f'[中文新聞] 缺少 content | url={article_url}')
         
         #keyword
         try:
@@ -676,7 +676,7 @@ class PTS(NewsLogic):
             keyword=';'.join([s for s in keyword if s !='...'])
         except:
             keyword=' '
-            print('Can not find keyword for url: '+article_url)
+            print(f'[中文新聞] 缺少 keyword | url={article_url}')
         
         article_id=re.search(string=article_url,pattern=r'article/(\d+)$').group(1)
         
@@ -741,7 +741,7 @@ class United(NewsLogic):
         except:
             title=[s.get('content') for s in soup.find_all('meta') if bool(re.search(string=str(s),pattern=r'og:title'))][0]
             title=title.split('|')[0]
-            print('Can not find title for url: '+article_url) 
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}') 
 
         #發表日期
         if tim is None or tim=='' or tim==' ':
@@ -768,7 +768,7 @@ class United(NewsLogic):
                     img=[s.get('content') for s in soup.find_all('meta') if bool(re.search(string=str(s),pattern='taboola:image'))][0]
                 except:
                     img=' '
-                    print(f'Error for img for {article_url}')   
+                    print(f'[中文新聞] 圖片欄位解析失敗 | url={article_url}')   
 
         try:
             category=[s.text for s in soup.find_all(class_='breadcrumb-items') if s.get('href') is not None][-1]
@@ -777,7 +777,7 @@ class United(NewsLogic):
                 category=soup.find(class_=re.compile('breadcrumb')).find('a').text.strip()
             except:
                 category=' '
-                print(f'Error for category for {article_url}')
+                print(f'[中文新聞] 分類解析失敗 | url={article_url}')
 
         #author
         try:
@@ -791,7 +791,7 @@ class United(NewsLogic):
                 try:
                     author=[s.get('content') for s in soup.find_all('meta') if bool(re.search(string=str(s),pattern=r'name=\"author\"/'))][0]
                 except:
-                    print('Can not find author for url: '+article_url)
+                    print(f'[中文新聞] 缺少 author | url={article_url}')
                     author=' '    
                     
         #keyword
@@ -799,7 +799,7 @@ class United(NewsLogic):
             keyword=';'.join([s.text.strip() for s in soup.find('section',class_='keywords').find_all('a')])
         except:
             keyword=' '
-            print('Can not find keyword for url: '+article_url)
+            print(f'[中文新聞] 缺少 keyword | url={article_url}')
         
         #content 
         #去除圖片影響
@@ -821,7 +821,7 @@ class United(NewsLogic):
                     content=content.strip()
                 except:
                     content=' '
-                    print('Can not find content for url: '+article_url)
+                    print(f'[中文新聞] 缺少 content | url={article_url}')
 
         article_id=re.search(string=article_url,pattern='\d+/\d+').group(0)
 
@@ -883,7 +883,7 @@ class LibertyTimes(NewsLogic):
             title=soup.find(re.compile('h1|title')).text.strip()
         except:
             title=' '
-            print('Can not find title for url: '+article_url)
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
         
         try:
             #created_at
@@ -894,7 +894,7 @@ class LibertyTimes(NewsLogic):
             created_at=re.sub(string=created_at,pattern='/',repl='-')
             created_at=format(datetime.datetime.strptime(created_at,'%Y-%m-%d %H:%M'),'%Y-%m-%d %H:%M:%S')
         except:
-            print('Can not find created_at for url: '+article_url)
+            print(f'[中文新聞] 缺少 created_at | url={article_url}')
             created_at=None
 
         try:
@@ -935,7 +935,7 @@ class LibertyTimes(NewsLogic):
                 author=re.sub(string=soup.find(class_='author').text,pattern=r'^\s+|\s+$',repl='')
             except:
                 author=' '
-            print('Can not find content for url: '+article_url)
+            print(f'[中文新聞] 缺少 content | url={article_url}')
             content=' '  
 
         article_id=re.search(string=article_url,pattern=r'/(\d+)$').group(1)
@@ -1001,20 +1001,20 @@ class iThome(NewsLogic):
             title=soup.find('h1').text
             title=re.sub(string=title,pattern=r'^\s+|\s+$|\u3000|\xa0',repl='')
         except:
-            print('Can not find title for url: '+article_url)
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
             title=' '
         
         try:
             created_at=soup.find(class_='submitted').find(class_='created').text
             created_at=format(datetime.datetime.strptime(created_at,'%Y-%m-%d'),'%Y-%m-%d %H:%M:%S')
         except:
-            print('Can not find dt_publish for url: '+article_url)
+            print(f'[中文新聞] 時間欄位無法解析 | url={article_url}')
             created_at=None
         
         try:
             author=soup.find(class_='submitted').find(class_='author').text.strip()
         except:
-            print('Can not find author for url: '+article_url)
+            print(f'[中文新聞] 缺少 author | url={article_url}')
             author=' '
         
         try:
@@ -1036,7 +1036,7 @@ class iThome(NewsLogic):
             
             content=content.strip()
         except:
-            print('Can not find content for url: '+article_url)
+            print(f'[中文新聞] 缺少 content | url={article_url}')
             content=' '    
         
         article_id=re.search(string=article_url,pattern=r'/(\d+)$').group(1)
@@ -1178,7 +1178,7 @@ class ETtoday(NewsLogic):
             category=soup.find(class_=re.compile('^logo_|_logo$')).text.strip()
         else:
             category=' '
-            print(f'Error for category for {article_url}')
+            print(f'[中文新聞] 分類解析失敗 | url={article_url}')
         
         try:
             img=soup.find(class_='story').find('img').get('src')
@@ -1273,7 +1273,7 @@ class CNA(NewsLogic):
             title=soup.find('h1').text
         except:
             title=' '
-            print('Can not find title for url: '+article_url)       
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')       
 
         created_at=tim
         
@@ -1286,7 +1286,7 @@ class CNA(NewsLogic):
                 content=re.sub(string=content,pattern=r'^\s+|\s+$',repl='')
             if content == '':
                 content=' '
-                print('Can not find content for url: '+article_url)
+                print(f'[中文新聞] 缺少 content | url={article_url}')
         except:
             try:
                 content=''
@@ -1295,10 +1295,10 @@ class CNA(NewsLogic):
                     content=re.sub(string=content,pattern=r'^\s+|\s+$',repl='')
                 if content == '':
                     content=' '
-                    print('Can not find content for url: '+article_url)
+                    print(f'[中文新聞] 缺少 content | url={article_url}')
             except:
                 content=' '
-                print('Can not find content for url: '+article_url)
+                print(f'[中文新聞] 缺少 content | url={article_url}')
         
         try:
             author=re.search(string=content,pattern=r'^〔[^〕]+〕|^［[^］]+］|^（[^）]+）').group(0)
@@ -1309,7 +1309,7 @@ class CNA(NewsLogic):
                 author=author.split('／')[0]
                 author=re.sub(string=author,pattern=r'中央社|^\s+|\s+$',repl='')
             except:
-                print('Can not find author for url: '+article_url)
+                print(f'[中文新聞] 缺少 author | url={article_url}')
                 author=' '  
         
         keyword=';'.join([k.text.replace('#','').strip() for k in soup.find_all(class_='keywordTag')])
@@ -1366,14 +1366,14 @@ class ChinaTimes(NewsLogic):
             title=soup.find('h1').text.strip()
             title=re.sub(string=title,pattern='\u3000|\xa0',repl='')
         except:
-            print('Can not find title for url: '+article_url)
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
             title=' '
         
         try:
             created_at=soup.find('time').get('datetime')
             created_at=format(datetime.datetime.strptime(created_at,'%Y-%m-%d %H:%M'),'%Y-%m-%d %H:%M:%S')
         except:
-            print('Can not find created_at for url: '+article_url)
+            print(f'[中文新聞] 缺少 created_at | url={article_url}')
             created_at=None
         
         try:
@@ -1390,14 +1390,14 @@ class ChinaTimes(NewsLogic):
             if author == '':
                 author=' '
         except:
-            print('Can not find author for url: '+article_url)
+            print(f'[中文新聞] 缺少 author | url={article_url}')
             author=' '
         
         try:
             img=soup.find('figure').find('img').get('src')
         except:
             img=' '
-            print('Can not find img for url: '+article_url)
+            print(f'[中文新聞] 缺少 img | url={article_url}')
 
         try:
             for s in soup.find_all(re.compile('img|figure')):
@@ -1407,7 +1407,7 @@ class ChinaTimes(NewsLogic):
             content='\n'.join(content)
             content=content.strip()
         except:
-            print('Can not find content for url: '+article_url)
+            print(f'[中文新聞] 缺少 content | url={article_url}')
             content=' '            
 
         #keyword
@@ -1416,7 +1416,7 @@ class ChinaTimes(NewsLogic):
             keyword=';'.join(keyword)
         except:
             keyword=' '
-            print('Can not find keyword for url: '+article_url)
+            print(f'[中文新聞] 缺少 keyword | url={article_url}')
         
         article_id=re.search(string=article_url,pattern=r'\d+-\d+').group(0)
 
@@ -1483,7 +1483,7 @@ class CP(NewsLogic):
                 data.append(pd.DataFrame(tmp,index=[0]))
             
             time.sleep(random.randint(1,3))
-            print(f'Done CP值 page : {page_num}')
+            print(f'[中文新聞] 列表頁完成 | 來源=CP值 | page={page_num}')
         
         df=pd.concat(data)
         df['created_at']=df['created_at'].astype('datetime64[ns]')
@@ -1554,7 +1554,7 @@ class InfoTalk(NewsLogic):
                 data.append(tmp)
             
             time.sleep(random.randint(1,3))
-            print(f'Done {self._source} page : {page_num}')
+            print(f'[中文新聞] 列表頁完成 | 來源={self._source} | page={page_num}')
         
         df=pd.DataFrame(data)
         df['created_at']=df['created_at'].astype('datetime64[ns]')
@@ -1606,7 +1606,7 @@ class TVBS(NewsLogic):
                 
                 img.append(img_tmp)
             except Exception as e:
-                print(e)
+                print(f'[中文新聞] 列表區塊解析失敗 | 來源={self._source} | {type(e).__name__}: {e}')
 
         TEMP=pd.DataFrame({'source':[self._source]*len(article_url),
                            'article_url':article_url,
@@ -1636,31 +1636,31 @@ class TVBS(NewsLogic):
             title=json_data['headline'].strip('│TVBS新聞網')
             title=re.sub(string=title,pattern=r'^\s+|\s+$|\u3000|\xa0',repl='')
         except:
-            print('Can not find title for url: '+article_url)
+            print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
             title=''
         
         try:
             created_at=datetime.datetime.strptime(json_data['dateCreated'], '%Y-%m-%dT%H:%M:%S+08:00').strftime('%Y-%m-%d %H:%M:%S')
         except:
-            print('Can not find created_at for url: '+article_url)
+            print(f'[中文新聞] 缺少 created_at | url={article_url}')
             created_at=None
 
         try:
             author=json_data['author']['name'].strip()
         except:
-            print('Can not find author for url: '+article_url)
+            print(f'[中文新聞] 缺少 author | url={article_url}')
             author=''
 
         try:
             content=json_data['articleBody'].strip()
         except:
-            print('Can not find content for url: '+article_url)
+            print(f'[中文新聞] 缺少 content | url={article_url}')
             content=' '    
 
         try:
             keyword=';'.join(json_data['keywords'])
         except:
-            print('Can not find keyword for url: '+article_url)
+            print(f'[中文新聞] 缺少 keyword | url={article_url}')
             keyword=''
 
         article_id=re.search(string=article_url,pattern=r'/(\d+)$').group(1)
@@ -1707,7 +1707,7 @@ class TVBS_SaveMoney(NewsLogic):
         json_data_list=[self.parse_json(section) for section in soup.find_all('script', {'type':'application/ld+json'}) if 'itemListElement' in self.parse_json(section)]
         
         if not json_data_list:
-            print(f'無法找到包含 itemListElement 的 JSON-LD 數據，URL: {self._domain_url}')
+            print(f'[中文新聞-TVBS] 無 JSON-LD itemList（頁面結構變更）| base={self._domain_url}')
             return pd.DataFrame(columns=['article_id', 'author', 'created_at', 'title', 'brief_content', 'views', 'img_url', 'article_url', 'create_time', 'source'])
         
         data=json_data_list[0]
@@ -1715,7 +1715,7 @@ class TVBS_SaveMoney(NewsLogic):
         article_id_list=[d['url'].split('/')[-1] for d in data]
         
         if not article_id_list:
-            print(f'無法從 JSON-LD 數據中提取文章 ID，URL: {self._domain_url}')
+            print(f'[中文新聞-TVBS] JSON-LD 無文章 ID | base={self._domain_url}')
             return pd.DataFrame(columns=['article_id', 'author', 'created_at', 'title', 'brief_content', 'views', 'img_url', 'article_url', 'create_time', 'source'])
         
         df=pd.read_sql_query(f"""

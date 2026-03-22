@@ -149,10 +149,10 @@ class StockInternationalCollectProcess(StockCollectLogic):
             self.log_process_record()
             
             self.log_record.success = 1
-            print('收集成功!')
+            print('[國際指數] 成功')
         except Exception as e:
             self.log_record.raise_error(repr(e))
-            print('任務失敗')
+            print(f'[國際指數] 失敗 | {type(e).__name__}: {e}')
             raise e
         finally:
             self.log_record.insert_to_log_record()
@@ -163,7 +163,7 @@ def interantional_stock():
     main_etl=StockInternationalCollectProcess()
     main_etl.process()
     
-    print(f'Done of international stock process')
+    print('[國際指數] DAG 任務結束')
 
 
 with DAG(

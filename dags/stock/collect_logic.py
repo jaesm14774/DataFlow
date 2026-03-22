@@ -62,7 +62,9 @@ class StockCollectLogic(MySQLConnection):
     """
     股票收集基本邏輯
     """
-    now_time=datetime.datetime.now()+datetime.timedelta(hours=8) #將時間變台灣時間
+    now_time=(datetime.datetime.strptime(BACKFILL_DATE, '%Y-%m-%d')
+              if BACKFILL_DATE
+              else datetime.datetime.now()+datetime.timedelta(hours=8))
     union_column_name_dict={
         '日期':'資料日期',
         '有價證券代號':'證券代號',
@@ -109,7 +111,7 @@ class StockCollectLogic(MySQLConnection):
         
     def clean_comma(self,txt,output_not_string=False):
         """
-        清除逗號
+        清除逗號，output_not_string=True 時強制轉數字，無法轉則回傳 np.nan
         """
         try:
             txt=str(txt).strip()
@@ -126,7 +128,7 @@ class StockCollectLogic(MySQLConnection):
                     try:
                         return float(txt)
                     except:
-                        return txt
+                        return np.nan
             else:
                 return txt
         else:
@@ -176,16 +178,17 @@ class StockCollectLogic(MySQLConnection):
         """
         主要的資料流程
         """
+        print(f'[{self.app_name}] 開始 | 基準日={self.now_time.date()} | BACKFILL_DATE={BACKFILL_DATE}')
         try:
             self.collect()
             self.save()
             self.log_process_record()
             
             self.log_record.success = 1
-            print('收集成功!')
+            print(f'[{self.app_name}] 成功 | insert={self.insert_count} delete={self.delete_count}')
         except Exception as e:
             self.log_record.raise_error(repr(e))
-            print('任務失敗')
+            print(f'[{self.app_name}] 失敗 | {type(e).__name__}: {e}')
             raise e
         finally:
             self.log_record.insert_to_log_record()
@@ -221,7 +224,7 @@ class StockBackUpProcess(MySQLConnection):
     #備份被移除的證券代號
     def back_up(self,code):
         self.code=str(code).strip()
-        print(f'Delete process for code: {self.code}')
+        print(f'[下市備份] 證券代號={self.code} | 將資料移至 delete_* 表並自來源表刪除')
 
         source_table_name_list=['全證券代碼相關資料表','個股成交資訊','大戶比例','公司資訊','地緣券商資訊',
                                 '月營收資訊','融資融券','主力買賣超','三大法人買賣','個股基本指標',
@@ -307,7 +310,7 @@ class StockBackUpProcess(MySQLConnection):
             if i % 5 == 0:
                 self.conn.commit()
             
-            print(f'Done {source_table_name_list}')
+            print(f'[下市備份] 證券代號={self.code} | {i+1}/{len(source_table_name_list)} | 表={source_table_name}')
 
         self.conn.commit()
 
@@ -343,7 +346,7 @@ class StockRenwInfoProcess(MySQLConnection):
             api_result=api_result[0]['geometry']['location']
             return (api_result['lng'],api_result['lat'])
         except Exception as e:
-            print('address to geo info error: ',e)
+            print(f'[新上市-地址轉經緯度] Google Geocode 失敗 | 地址={addr!s} | {type(e).__name__}: {e}')
             return np.nan
         
     #公司地址
@@ -373,7 +376,7 @@ class StockRenwInfoProcess(MySQLConnection):
     #更新新增的代號所需的表格
     def renew_info(self,code):
         self.code=str(code).strip()
-        print(f'Add process for new code: {self.code}')
+        print(f'[新上市更新] 證券代號={self.code} | 寫入公司資訊與地緣券商')
         #更新 公司資訊 
         #公開資訊站
         url='https://mopsov.twse.com.tw/mops/web/ajax_t05st03'
@@ -435,7 +438,7 @@ class StockRenwInfoProcess(MySQLConnection):
         company_info['geometry']=company_info['geometry'].astype('str')
 
         company_info.to_sql('公司資訊',self.engine,index=False,if_exists='append')
-        print('Renew 公司資訊 for : '+code)  
+        print(f'[新上市更新] 證券代號={code} | 已寫入「公司資訊」')
         
         #更新 地緣券商資訊
         B=pd.read_sql_query('select * from 全券商分行地址',self.engine)
@@ -467,7 +470,7 @@ class StockRenwInfoProcess(MySQLConnection):
         R=R.drop_duplicates(['證券代號', '公司名稱', '券商名稱'])
 
         R.to_sql('地緣券商資訊',self.engine,index=0,if_exists='append')
-        print('Renew company and broker for : '+code)
+        print(f'[新上市更新] 證券代號={code} | 已寫入「地緣券商資訊」')
 
         #主力買賣超、大戶比例、月營收資訊...皆是下次執行個人專屬程式時，會如期更新
 
@@ -549,8 +552,8 @@ class StockAllCodeInfoCollectProcess(StockCollectLogic):
         self.new_code=[s for s in D.證券代號 if s not in old.證券代號.tolist()]
         self.delete_code=[s for s in old.證券代號 if s not in D.證券代號.tolist()]
 
-        print('new_code: ',self.new_code)
-        print('delete_code: ',self.delete_code)
+        print(f'[全證券代碼] 新增 {len(self.new_code)} 支: {self.new_code}')
+        print(f'[全證券代碼] 下市/移除 {len(self.delete_code)} 支: {self.delete_code}')
         
         self.result=D
     
@@ -588,22 +591,28 @@ class StockThreeMainInvestorCollectProcess(StockCollectLogic):
     def convert_three_mainforce_data_into_sql_format(self,df,unique_pair):
         cdf=df.loc[:,['證券代號','證券名稱','資料日期']]
         
-        for s in [col for col in df.columns if col not in ['資料日期','證券代號','證券名稱']]:
+        numeric_cols=[col for col in df.columns if col not in ['資料日期','證券代號','證券名稱']]
+        for s in numeric_cols:
             df[s]=df[s].apply(self.clean_comma,output_not_string=True)
         
-        cdf['外資買進股數']=df.loc[:,[s for s in df.columns if s.find('外') != -1 and s.find('買進') != -1]].apply(sum,axis=1)
-        cdf['外資賣出股數']=df.loc[:,[s for s in df.columns if s.find('外') != -1 and s.find('賣出') != -1]].apply(sum,axis=1)
-        cdf['外資買賣超股數']=df.loc[:,[s for s in df.columns if s.find('外') != -1 and s.find('買賣超') != -1]].apply(sum,axis=1)
+        nan_info=df[numeric_cols].isnull().sum()
+        nan_cols=nan_info[nan_info>0]
+        if len(nan_cols)>0:
+            print(f'[三大法人] 數值轉換含 NaN（來源缺值）| 欄位與筆數: {dict(nan_cols)}')
+        
+        cdf['外資買進股數']=df.loc[:,[s for s in df.columns if s.find('外') != -1 and s.find('買進') != -1]].apply(pd.to_numeric,errors='coerce').sum(axis=1)
+        cdf['外資賣出股數']=df.loc[:,[s for s in df.columns if s.find('外') != -1 and s.find('賣出') != -1]].apply(pd.to_numeric,errors='coerce').sum(axis=1)
+        cdf['外資買賣超股數']=df.loc[:,[s for s in df.columns if s.find('外') != -1 and s.find('買賣超') != -1]].apply(pd.to_numeric,errors='coerce').sum(axis=1)
 
-        cdf['投信買進股數']=df.loc[:,[s for s in df.columns if s.find('投信') != -1 and s.find('買進') != -1]].apply(sum,axis=1)
-        cdf['投信賣出股數']=df.loc[:,[s for s in df.columns if s.find('投信') != -1 and s.find('賣出') != -1]].apply(sum,axis=1)
-        cdf['投信買賣超股數']=df.loc[:,[s for s in df.columns if s.find('投信') != -1 and s.find('買賣超') != -1]].apply(sum,axis=1)
+        cdf['投信買進股數']=df.loc[:,[s for s in df.columns if s.find('投信') != -1 and s.find('買進') != -1]].apply(pd.to_numeric,errors='coerce').sum(axis=1)
+        cdf['投信賣出股數']=df.loc[:,[s for s in df.columns if s.find('投信') != -1 and s.find('賣出') != -1]].apply(pd.to_numeric,errors='coerce').sum(axis=1)
+        cdf['投信買賣超股數']=df.loc[:,[s for s in df.columns if s.find('投信') != -1 and s.find('買賣超') != -1]].apply(pd.to_numeric,errors='coerce').sum(axis=1)
         
-        cdf['自營商買進股數']=df.loc[:,[s for s in df.columns if s.find('自營商') != -1 and s.find('買進') != -1 and s.find('外') == -1]].apply(sum,axis=1)
-        cdf['自營商賣出股數']=df.loc[:,[s for s in df.columns if s.find('自營商') != -1 and s.find('賣出') != -1 and s.find('外') == -1]].apply(sum,axis=1)
+        cdf['自營商買進股數']=df.loc[:,[s for s in df.columns if s.find('自營商') != -1 and s.find('買進') != -1 and s.find('外') == -1]].apply(pd.to_numeric,errors='coerce').sum(axis=1)
+        cdf['自營商賣出股數']=df.loc[:,[s for s in df.columns if s.find('自營商') != -1 and s.find('賣出') != -1 and s.find('外') == -1]].apply(pd.to_numeric,errors='coerce').sum(axis=1)
         
-        cdf['自營商買賣超股數']=df['自營商買賣超股數']
-        cdf['三大法人買賣超股數']=df['三大法人買賣超股數']
+        cdf['自營商買賣超股數']=pd.to_numeric(df['自營商買賣超股數'],errors='coerce')
+        cdf['三大法人買賣超股數']=pd.to_numeric(df['三大法人買賣超股數'],errors='coerce')
         
         cdf=cdf[~cdf.duplicated(subset=unique_pair)]
         
@@ -618,13 +627,15 @@ class StockThreeMainInvestorCollectProcess(StockCollectLogic):
     def collect(self):
         #上市
         time_format=self.now_time.strftime('%Y%m%d')
+        twse_url=f'https://www.twse.com.tw/rwd/zh/fund/T86?response=json&date={time_format}&selectType=ALL'
+        print(f'[三大法人-上市] 請求日={time_format} | {twse_url}')
 
-        a=requests.get('https://www.twse.com.tw/rwd/zh/fund/T86?response=json&date='+time_format+'&selectType=ALL',
-                       timeout=30)
+        a=requests.get(twse_url, timeout=30)
         a=a.json()
         #column name
         d1=pd.DataFrame(columns=a['fields'],data=a['data'])
         d1['資料日期']=self.now_time.strftime('%Y-%m-%d')
+        print(f'[三大法人-上市] 回傳筆數={len(d1)} | 欄位={list(d1.columns)}')
         d1=self.convert_three_mainforce_data_into_sql_format(df=d1,unique_pair=['證券代號'])
 
         #上櫃
@@ -632,6 +643,7 @@ class StockThreeMainInvestorCollectProcess(StockCollectLogic):
         n=re.search(string=time_format,pattern=r'^(\d+)/').group(1)
         temp_time_format=re.sub(string=time_format,pattern=n,
                     repl=str(int(n)-1911))
+        print(f'[三大法人-上櫃] 請求日={temp_time_format}')
         
         response=requests.post('https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade',
             data={
@@ -656,6 +668,7 @@ class StockThreeMainInvestorCollectProcess(StockCollectLogic):
         
         d2=pd.DataFrame(response['tables'][0]['data'], columns = col_name)
         d2['資料日期']=time_format
+        print(f'[三大法人-上櫃] 回傳筆數={len(d2)} | 欄位={list(d2.columns)}')
 
         #!!! 雷爆，外資及陸資買進股數=外陸資買進股數(不含外資自營商)+外資自營商買進股數
         if '外資及陸資買進股數' in d2.columns:
@@ -666,6 +679,7 @@ class StockThreeMainInvestorCollectProcess(StockCollectLogic):
         D=pd.concat([d1,d2],ignore_index=True)
         D=D[~D.duplicated()]
         D=D.sort_values(['證券代號'])
+        print(f'[三大法人] 上市+上櫃合併後筆數={len(D)}')
         self.result=D
 
     def save(self):
@@ -743,7 +757,7 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
         for col in self.numeric_col:
             d1[col]=d1[col].apply(self.clean_comma,output_not_string=True) 
         d1.loc[:,self._select_columns].to_sql(self._diff_table_name,self.engine,index=0,if_exists='append')
-        print(f'twse collect code: {code} is done.')
+        print(f'[個股成交-上市] 證券代號={code} | 已寫入 diff')
         
         return d1
         
@@ -765,8 +779,7 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
                 time.sleep(random.randint(32,42)/10)
             except Exception as e:
                 time.sleep(random.randint(32,42)/10)
-                print(e)
-                print(code)
+                print(f'[個股成交-上市] 證券代號={code} | 首輪失敗 | {type(e).__name__}: {e}')
                 ER.append(code)
         
         E=len(ER)
@@ -786,11 +799,11 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
                     time.sleep(random.randint(32,42)/10)
                 E=0
             except Exception as e:
-                print(e)
+                print(f'[個股成交-上市] 重試批次例外 | 目前代號={code} | {type(e).__name__}: {e}')
                 time.sleep(random.randint(32,42)/10)
                 N+=1
                 er[code]=er[code]+1
-                print(er)
+                print(f'[個股成交-上市] 重試計次 | 輪次={N} | 各代號重試次數={er}')
                 if er[code]>2:
                     if code in ER:
                         ER.remove(code)
@@ -825,7 +838,7 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
         d2['資料日期']=d2['資料日期'].map(self.make_regular_date_format)
         d2=d2.sort_values(['資料日期'],ascending=False)
         d2.loc[:,self._select_columns].to_sql(self._diff_table_name,self.engine,index=0,if_exists='append')
-        print(f'tpex collect code: {code} is done.')
+        print(f'[個股成交-上櫃] 證券代號={code} | 已寫入 diff')
         
         return d2
     
@@ -844,8 +857,7 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
                 d2=self.tpex_crawler(time_format, code)
                 tpex.append(d2) #採取delete insert，先暫存insert資料
             except Exception as e:
-                print(f'櫃買市場: {code} is failed!')
-                print(e)
+                print(f'[個股成交-上櫃] 證券代號={code} | 失敗 | {type(e).__name__}: {e}')
                 time.sleep(3)
             time.sleep(1.5)
         
@@ -1029,7 +1041,7 @@ class StockDayTradeCollectProcess(StockCollectLogic):
         
         #上櫃
         time_format=self.really_date.strftime('%Y/%m/%d')
-        print('確認 當沖資訊 上櫃 日期參數: ',time_format)
+        print(f'[當沖資訊-上櫃] 請求日參數={time_format}')
         url = 'https://www.tpex.org.tw/www/zh-tw/intraday/stat'
         col_name = ['證券代號','證券名稱','temp','當日沖銷交易成交股數', '當日沖銷交易買進成交金額','當日沖銷交易賣出成交金額']
 
@@ -1087,7 +1099,7 @@ class StockDayTradeCollectProcess(StockCollectLogic):
                 self.collect()
                 break
             except Exception as e:
-                print('當沖資訊: ',e)
+                print(f'[當沖資訊] collect 失敗（將 sleep 重試）| {type(e).__name__}: {e}')
                 
                 if count >= retry_time:
                     break
@@ -1102,10 +1114,10 @@ class StockDayTradeCollectProcess(StockCollectLogic):
             self.log_process_record()
             
             self.log_record.success = 1
-            print('收集成功!')
+            print('[當沖資訊] 成功 | 已寫入 DB')
         except Exception as e:
             self.log_record.raise_error(repr(e))
-            print('任務失敗')
+            print(f'[當沖資訊] 失敗 | {type(e).__name__}: {e}')
             raise e
         finally:
             self.log_record.insert_to_log_record()
@@ -1137,7 +1149,7 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
         twse_code=all_code_info[all_code_info.市場別 == '上市'].證券代號.tolist()
         temp=pd.read_sql_query(f"select 證券代號 from 券商進出總表 where 資料日期 = '{self.today}'",self.engine)
         self.twse_code=[code for code in twse_code if code not in temp.證券代號.unique()]
-        print(f'Remaining for twse broker inout collect is : {len(self.twse_code)}')
+        print(f'[券商進出-證交所] 待抓上市代號數={len(self.twse_code)}（已排除當日已有資料）')
         
         broker=pd.read_sql_query('select * from 全券商分行地址',self.engine)
         broker_dict={}
@@ -1145,9 +1157,9 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
             broker_dict[row['證券商代號']]=row['證券商名稱']     
         self.broker_dict=broker_dict
         
-        print('model loading...')
+        print('[券商進出-證交所] 載入驗證碼 CNN 模型…')
         self.model = tf.keras.models.load_model(self.model_path)
-        print('loading completed')
+        print('[券商進出-證交所] 驗證碼模型載入完成')
 
     #整併證交所商買賣的資訊
     def summarize(self,dat):
@@ -1264,7 +1276,7 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
                     headers=self.headers,timeout=60,verify=False,)
         
         if '驗證碼錯誤!' in resp.text:
-            print('驗證碼錯誤, predict_captcha: ' + predict_captcha)      
+            print(f'[券商進出-證交所] 驗證碼辨識錯誤 | 預測={predict_captcha!r} | 將重試')
             return '驗證碼錯誤'
         #呼叫 html格式的網頁表
         a=session.get('https://bsr.twse.com.tw/bshtm/bsContent.aspx?v=t',timeout=60,verify=False)
@@ -1273,8 +1285,7 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
         try:
             T=self.parse_and_clean_table(soup,code=code)
         except Exception as e:
-            print('code:',code,'\n','Error:',e,'\n\n')
-            
+            print(f'[券商進出-證交所] 證券代號={code} | 解析頁面失敗 | {type(e).__name__}: {e}')
             return '沒有資料，請檢查'
         
         session.close()
@@ -1292,14 +1303,14 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
 
                 if isinstance(t,pd.DataFrame):
                     twse.append(t)
-                    print(f'code:{code} is done!')
+                    print(f'[券商進出-證交所] 證券代號={code} | 首輪完成')
                 else:
                     if t == '沒有資料，請檢查':
                         ER2.append(code)
                     else:
                         ER.append(code)
             except Exception as e:
-                print('錯誤訊息:',e,'\n')
+                print(f'[券商進出-證交所] 證券代號={code} | 首輪例外 | {type(e).__name__}: {e}')
                 ER.append(code)
                 
                 time.sleep(random.randint(11,25)/10)
@@ -1319,15 +1330,15 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
                     if isinstance(t,pd.DataFrame):
                         twse.append(t)
                         accurate_code.append(code)
-                        print(f'code:{code} is done!')
+                        print(f'[券商進出-證交所] 證券代號={code} | 重試成功')
                 ER=[s for s in ER if s not in accurate_code]
             except Exception as e:
                 try:
-                    print('twse broker inout collect : ',e)
+                    print(f'[券商進出-證交所] 重試批次例外 | 目前代號={code} | {type(e).__name__}: {e}')
                     er[code]=er[code]+1
-                except:
+                except Exception:
                     er[code]=1
-                print('N:',N,'\ner:',er)
+                print(f'[券商進出-證交所] 重試輪次={N} | 各代號重試次數={er}')
                 time.sleep(random.randint(11,25)/10)
                 N=N+1
                 er[code]=er[code]+1
@@ -1345,7 +1356,7 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
     
     def save(self):
         if len(self.result)>0:
-            print('save step start')
+            print('[券商進出-證交所] 合併結果並寫入 DB…')
             result=pd.concat(self.result)
             result['券商名稱']=result.券商代號.map(self.broker_dict)
             result=result[~result.duplicated(subset=['日期','證券代號','券商代號'])]
@@ -1579,10 +1590,11 @@ class StockMarginTradeCollectProcess(StockCollectLogic):
                 df=self.get_margin_data(code)
                 result.append(df)
                 
-                print(f'融資融券收集 - {code} 已完成')
+                print(f'[融資融券] 證券代號={code} | 首輪完成')
                 time.sleep(random.randint(1,3))
-            except:
+            except Exception as e:
                 error.append(code)
+                print(f'[融資融券] 首輪失敗 | 證券代號={code} | {type(e).__name__}: {e}')
 
         error_length=len(error)
         accurate_code=[]
@@ -1597,12 +1609,12 @@ class StockMarginTradeCollectProcess(StockCollectLogic):
                 for code in error:
                     df=self.get_margin_data(code)
                     result.append(df)
-                    print(f'融資融券收集 - {code} 已完成')
+                    print(f'[融資融券] 證券代號={code} | 重試成功')
                     accurate_code.append(code)
                 
                 error_length=0
-            except:
-                print(f'融資融券收集 - {code} 失敗')
+            except Exception as e:
+                print(f'[融資融券] 重試失敗 | 證券代號={code} | 第{N}輪 | {type(e).__name__}: {e}')
                 N+=1
                 error_counter_dict[code]+=+1
                 
@@ -1716,10 +1728,11 @@ class StockMonthRevenueCollectProcess(StockCollectLogic):
                 df=self.get_month_revenue(code)
                 result.append(df)
                 
-                print(f'月營收資訊收集 - {code} 已完成')
+                print(f'[月營收] 證券代號={code} | 首輪完成')
                 time.sleep(random.randint(2,4))
-            except:
+            except Exception as e:
                 error.append(code)
+                print(f'[月營收] 首輪失敗 | 證券代號={code} | {type(e).__name__}: {e}')
 
         error_length=len(error)
         accurate_code=[]
@@ -1732,15 +1745,15 @@ class StockMonthRevenueCollectProcess(StockCollectLogic):
         while error_length != 0:
             try:
                 for code in error:
-                    df=self.get_margin_data(code)
+                    df=self.get_month_revenue(code)
                     result.append(df)
-                    print(f'月營收資訊收集 - {code} 已完成')
+                    print(f'[月營收] 證券代號={code} | 重試成功')
                     accurate_code.append(code)
                     time.sleep(random.randint(2,4))
                 
                 error_length=0
-            except:
-                print(f'月營收資訊收集 - {code} 失敗')
+            except Exception as e:
+                print(f'[月營收] 重試失敗 | 證券代號={code} | 第{N}輪 | {type(e).__name__}: {e}')
                 N+=1
                 error_counter_dict[code]+=+1
                 

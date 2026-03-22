@@ -111,7 +111,7 @@ class StockLotteryCollectProcess(StockCollectLogic):
     
     def save(self):
         if len(self.result)>0:
-            print('save step start')
+            print('[樂透通知] 寫入 DB…')
             #step1 truncate delete temp table
             self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
             self.conn.commit()
@@ -178,10 +178,10 @@ class StockLotteryCollectProcess(StockCollectLogic):
             self.log_process_record()
             
             self.log_record.success = 1
-            print('收集成功!')
+            print('[樂透通知] 成功')
         except Exception as e:
             self.log_record.raise_error(repr(e))
-            print('任務失敗')
+            print(f'[樂透通知] 失敗 | {type(e).__name__}: {e}')
             raise e
         finally:
             self.log_record.insert_to_log_record()
@@ -195,4 +195,4 @@ def lottery_collect():
     main_etl=StockLotteryCollectProcess()
     main_etl.process()
     
-    print('Done collection of stock lottery collect process')
+    print('[樂透通知] DAG 任務結束')

@@ -6,7 +6,7 @@ from lib.log_process_execution import BaseLogRecord
 from lib.notify import DiscordNotify
 from common.config import *
 
-from news_ch.news_crawler.module import *
+from news_ch.news_crawler import CP, InfoTalk, TVBS_SaveMoney
 
 app_name = 'save_money'
 database_name = 'news_ch'
@@ -47,7 +47,6 @@ save_money_ch_notify.webhook_url=token
 
 def collect_news(conn,cursor,engine,log_record):
     _key_columns=['article_id','source']
-    global table_name
     
     try:
         #得到所有文章的資訊
@@ -77,7 +76,6 @@ def collect_news(conn,cursor,engine,log_record):
         raise e        
 
 def delete_and_insert(conn,cursor,engine,log_record):
-    global table_name
     try:
         delete_sql=f"""
         delete tb from {table_name} as tb
@@ -113,7 +111,6 @@ def delete_and_insert(conn,cursor,engine,log_record):
         log_record.insert_to_log_record()
 
 def notification(conn,cursor,engine):
-    global table_name
     _key_columns=['article_id','source']
     notification_table_name = 'notification_record'
     

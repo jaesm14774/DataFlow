@@ -176,13 +176,13 @@ def fetch_card_data(**kwargs):
             # 方法1: 等待特定元素
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[data-module-id="results-page-product-card"]')))
             print("找到目標元素: div[data-module-id='results-page-product-card']")
-        except:
+        except Exception:
             print("未找到預期元素，嘗試其他選擇器...")
             # 方法2: 等待任何包含信用卡相關內容的元素
             try:
                 wait.until(lambda d: '信用卡' in d.page_source or 'card' in d.page_source.lower())
                 print("頁面內容已載入")
-            except:
+            except Exception:
                 print("頁面載入超時，繼續嘗試解析...")
         
         # 滾動頁面以觸發懶加載
@@ -285,7 +285,7 @@ def fetch_card_data(**kwargs):
                     print("頁面包含'信用卡'關鍵字")
                 if 'money101' in page_source.lower():
                     print("頁面包含'money101'關鍵字")
-            except:
+            except Exception:
                 pass
         
         return []

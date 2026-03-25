@@ -2,12 +2,16 @@ import re
 import datetime
 import pandas as pd
 import numpy as np
-from urllib.parse import urlparse
 from lib.get_sql import *
 from lib.log_process_execution import BaseLogRecord
 from common.config import *
 from lib.common_tool import task_wrapper
-from news_ch.news_crawler.module import *
+from news_ch.news_crawler import (
+    Anue, ChinaTimes, CNA, ETtoday, iThome,
+    LibertyTimes, NewTalk, PTS, SETN,
+    TheNewsLens, United, TVBS,
+)
+from news_ch.utils import is_valid_url, clean_text, clean_time_format
 
 app_name = 'news_ch'
 database_name = 'news_ch'
@@ -37,50 +41,19 @@ source_dict={}
 for k in task_dict.keys():
     source_dict[task_dict[k]._source]=task_dict[k]
 
-#連接mysql
-#read sql config
 connection=pd.read_csv(sql_configure_path,index_col='name')
-conn,cursor,engine=get_sql(connection.loc['host','value'],
-                           int(connection.loc['port','value']),
-                           connection.loc['user','value'],
-                           connection.loc['password','value'],database_name)
+
+def _new_connection():
+    return get_sql(connection.loc['host','value'],
+                   int(connection.loc['port','value']),
+                   connection.loc['user','value'],
+                   connection.loc['password','value'],database_name)
+
+conn,cursor,engine=_new_connection()
 
 before_count=pd.read_sql_query(f'select count(id) as N from {table_name}',engine)['N'].iloc[0]
 log_record.set_before_count(before_count)
 print(f'[中文新聞] DB 既有筆數={before_count}')
-
-def is_valid_url(url):
-    """
-    判斷一個URL是否為有效的正常URL
-    
-    參數:
-    url (str): 需要驗證的URL字符串
-    
-    返回:
-    bool: 如果URL有效則返回True，否則返回False
-    """
-    # 檢查URL是否為空
-    if not url:
-        return False
-    
-    # 基本URL格式的正則表達式
-    regex = re.compile(
-        r'^(?:http|https)://' # http:// 或 https:// 開頭
-        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' # 域名
-        r'localhost|' # localhost
-        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # 或IP地址
-        r'(?::\d+)?' # 可選的端口
-        r'(?:/?|[/?]\S+)$', re.IGNORECASE) # 路徑和查詢參數
-    
-    if re.match(regex, url) is not None:
-        try:
-            # 使用urlparse進一步驗證URL結構
-            result = urlparse(url)
-            # 檢查協議、網絡位置和路徑
-            return all([result.scheme, result.netloc])
-        except:
-            return False
-    return False
 
 #收集所有文章網址
 @task_wrapper
@@ -116,47 +89,6 @@ def get_info(article_url,source,category,tim,img,keyword):
                                                 tim=tim,
                                                 img=img,
                                                 keyword=keyword)
-
-#清理特殊符號
-def clean_text(text,special_sign='\"'):
-    return re.sub(string=text,pattern=special_sign,repl='')
-
-def clean_time_format(time_format):
-    """
-    Clean and standardize time format to '%Y-%m-%d %H:%M:%S'
-    - Replace '/' with '-'
-    - If format is '%Y-%m-%d %H:%M', add ':00' seconds
-    - Return None for invalid formats
-    
-    Args:
-        time_format (str): Input time string
-        
-    Returns:
-        str or None: Standardized time string in '%Y-%m-%d %H:%M:%S' format or None if invalid
-    """
-    # Convert to string and standardize separators
-    time_format = str(time_format).replace('/', '-')
-    
-    # Remove double spaces
-    time_format = re.sub(string=time_format, pattern='  ', repl=' ')
-    
-    # Check if format starts with '0' (error case)
-    if time_format[0] == '0':
-        return None
-    
-    # Try standard format first
-    try:
-        datetime.datetime.strptime(time_format, '%Y-%m-%d %H:%M:%S')
-        return time_format
-    except ValueError:
-        # Try format without seconds
-        try:
-            dt = datetime.datetime.strptime(time_format, '%Y-%m-%d %H:%M')
-            # Add seconds to the format
-            return dt.strftime('%Y-%m-%d %H:%M') + ':00'
-        except ValueError:
-            # Invalid format
-            return None
 
 @task_wrapper
 def collect_news(conn,cursor,engine,log_record):
@@ -199,11 +131,7 @@ def collect_news(conn,cursor,engine,log_record):
         D_temp.title=D_temp.title.apply(clean_text,special_sign='\"')
         D_temp=D_temp.reset_index(drop=True)
         
-        #連接mysql(避免程式處理時間過久，已中斷連線)
-        conn,cursor,engine=get_sql(connection.loc['host','value'],
-                                int(connection.loc['port','value']),
-                                connection.loc['user','value'],
-                                connection.loc['password','value'],database_name)
+        conn,cursor,engine=_new_connection()
         
         cursor.execute('truncate table news_diff')
         cursor.execute('truncate table news_temp')
@@ -225,11 +153,7 @@ def collect_news(conn,cursor,engine,log_record):
 @task_wrapper
 def delete_and_insert(conn,cursor,engine,log_record):
     try:
-        #連接mysql(避免程式處理時間過久，已中斷連線)
-        conn,cursor,engine=get_sql(connection.loc['host','value'],
-                                int(connection.loc['port','value']),
-                                connection.loc['user','value'],
-                                connection.loc['password','value'],database_name)
+        conn,cursor,engine=_new_connection()
         
         delete_sql=f"""
         delete tb from news as tb

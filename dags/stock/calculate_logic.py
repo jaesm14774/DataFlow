@@ -2,45 +2,16 @@ import numpy as np
 import re
 import pandas as pd
 import time
-from urllib.parse import quote_plus
-from sqlalchemy import create_engine
-import pymysql
 from stock.config.config import *
 from itertools import chain
-import MySQLdb
+from lib.db_connection import MySQLConnection as _BaseMySQLConnection
 
-class MySQLConnection:
-    db_name=DB_NAME
-    
-    def __init__(self,sql_configure_path):
-        self.connection=pd.read_csv(sql_configure_path,index_col='name')
-        """
-        host:server ip of sql
-        port:port sql
-        user:user name of sql
-        password:password of sql user
-        db_name:name of database
-        """
-        host=self.connection.loc['host','value']
-        port=int(self.connection.loc['port','value'])
-        user=self.connection.loc['user','value']
-        password=self.connection.loc['password','value']
-        
-        self.conn=pymysql.connect(host=host,
-                                 port=int(port),
-                                 user=user,
-                                 password=password,
-                                 db=self.db_name)
-        
-        self.cursor=self.conn.cursor()
-        
-        self.engine = create_engine('mysql+mysqldb://%s:%s@%s:%s/%s?charset=utf8mb4' % 
-                                   (user,quote_plus(password),host,port,self.db_name))
-        
-    def end(self):
-        self.conn.close()
-        
-        self.engine.dispose()
+
+class MySQLConnection(_BaseMySQLConnection):
+    """stock 專用：繼承統一版 MySQLConnection，預設使用 stock config 的 DB_NAME。"""
+
+    def __init__(self, sql_configure_path=None):
+        super().__init__(db_name=DB_NAME, sql_configure_path=sql_configure_path or globals().get('sql_configure_path'))
 
 
 class StockCalculateLogic(MySQLConnection):
@@ -71,7 +42,7 @@ class StockCalculateLogic(MySQLConnection):
     def clean_comma(self,txt,output_not_string=False):
         try:
             txt=str(txt).strip()
-        except:
+        except Exception:
             pass
 
         if isinstance(txt,str):
@@ -80,10 +51,10 @@ class StockCalculateLogic(MySQLConnection):
             if output_not_string:
                 try:
                     return int(txt)
-                except:
+                except Exception:
                     try:
                         return float(txt)
-                    except:
+                    except Exception:
                         return txt
             else:
                 return txt
@@ -101,7 +72,7 @@ class StockCalculateLogic(MySQLConnection):
         elif len(dt) == 10: #西元年
             dt=dt
         else:
-            assert f'沒看過的日期格式:{dt}'
+            raise ValueError(f'沒看過的日期格式: {dt}')
 
         dt=dt.replace('/','-')
         return dt
@@ -513,7 +484,7 @@ class StockCalculateBrokerRecommendationProcess(StockCalculateLogic):
         
         try:#當天未交易或倒閉股票
             already_publish=self.geo_broker_info[self.geo_broker_info.證券代號 == code].已發行普通股數.iloc[0]
-        except:
+        except Exception:
             return
         
         if (buy_r.買賣超.iloc[0]/already_publish) <  self.buy_sell_ratio_threshold:
@@ -738,7 +709,7 @@ class StockCalculateBrokerTenDaysRecommendationProcess(StockCalculateLogic):
         
         try:#當天未交易或倒閉股票
             already_publish=self.geo_broker_info[self.geo_broker_info.證券代號 == code].已發行普通股數.iloc[0]
-        except:
+        except Exception:
             return
         
         if (buy_r.買賣超.iloc[0]/already_publish) <  self.buy_sell_ratio_threshold:

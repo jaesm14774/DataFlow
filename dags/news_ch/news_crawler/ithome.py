@@ -72,6 +72,23 @@ class iThome(NewsLogic):
             img=soup.find(class_='img-wrapper').find('img').get('src')
         except Exception:
             img=' '
+
+        try:
+            bc=soup.find(class_='breadcrumb')
+            if bc:
+                links=bc.find_all('a')
+                if len(links)>1:
+                    category=links[-1].text.strip()
+                elif links:
+                    category=links[0].text.strip()
+            if not category or category==' ':
+                cat_el=soup.select_one('.article-type a, .field-name-field-category a')
+                if cat_el:
+                    category=cat_el.text.strip()
+        except Exception:
+            pass
+        if not category or category==' ':
+            category=keyword.split(';')[0] if keyword and keyword!=' ' else ' '
        
         for s in soup.find_all(re.compile('img|figure')):
             s.decompose()

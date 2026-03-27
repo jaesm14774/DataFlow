@@ -10,3 +10,4 @@ boto3
 cloudscraper==1.2.71
 selenium
 webdriver-manager
+cloudscraper

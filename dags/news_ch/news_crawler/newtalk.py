@@ -19,25 +19,50 @@ class NewTalk(NewsLogic):
 
         url=[];tag=[];Time=[];img=[]
 
-        for part in soup.find_all(class_='news-list-item clearfix'):
-            #可能是影音專區 or 錯誤時間
+        items=soup.find_all(class_='news-list-item clearfix')
+        if not items:
+            news_ul=soup.select_one('ul.category-list')
+            if news_ul:
+                items=news_ul.find_all('li',class_=lambda c: c and 'hover-parent-image-scale' in c)
+            else:
+                items=[]
+
+        for part in items:
             try:
-                t=part.find(class_='news_date').text
-                t1=re.search(string=t,pattern=r'\d+\.\d+\.\d+').group(0)
-                t2=re.search(string=t,pattern=r'\d+:\d+').group(0)
+                date_el=part.find(class_='news_date') or part.find('p',class_='date')
+                if not date_el:
+                    continue
+                t=date_el.text
+                t=re.sub(r'^.*發布\s*','',t).strip()
+                t1_m=re.search(r'\d+\.\d+\.\d+',t)
+                t2_m=re.search(r'\d+:\d+',t)
+                if not t1_m or not t2_m:
+                    continue
+                t1=t1_m.group(0)
+                t2=t2_m.group(0)
             except Exception:
                 continue
             
-            url.append(part.find('a').get('href'))
+            a_tag=part.select_one('a[href*="/news/view/"]') or part.find('a')
+            if not a_tag:
+                continue
+            href=a_tag.get('href','')
+            if href and not href.startswith('http'):
+                href=self._domain_url+href
+            url.append(href)
 
-            tag=' '
-
+            tag.append(' ')
             Time.append(t1+' '+t2)
-            img.append(part.find('img').get('src'))
+
+            img_el=part.find('img')
+            if img_el:
+                img.append(img_el.get('data-src') or img_el.get('src') or '')
+            else:
+                img.append('')
 
         TEMP=pd.DataFrame({'source':self._source,
                            'article_url':url,
-                           'category':tag,
+                           'category':' ',
                            'created_at':Time,
                            'img':img,
                            'keyword':' '})      
@@ -56,33 +81,74 @@ class NewTalk(NewsLogic):
 
         created_at=tim.replace('.','-')
 
-        category=soup.find(class_='tags').find(class_='subcategory_tag').text
+        try:
+            tags_el=soup.find(class_='tags')
+            if tags_el:
+                cat_el=tags_el.find(class_='subcategory_tag')
+                if cat_el:
+                    category=cat_el.text.strip()
+                else:
+                    first_a=tags_el.find('a')
+                    category=first_a.text.strip() if first_a else ' '
+            else:
+                bc=soup.select_one('.breadcrumb a, nav[aria-label="breadcrumb"] a')
+                if bc:
+                    bcs=soup.select('.breadcrumb a, nav[aria-label="breadcrumb"] a')
+                    category=bcs[-1].text.strip() if bcs else ' '
+                else:
+                    meta_sec=soup.find('meta',{'property':'article:section'})
+                    category=meta_sec['content'].strip() if meta_sec and meta_sec.get('content') else ' '
+            if not category:
+                category=' '
+        except Exception:
+            category=' '
 
         try:
-            keyword=';'.join([s.text for s in soup.find(class_='tags').find_all('a')[1:]])
+            tags_el=soup.find(class_='tags')
+            if tags_el:
+                keyword=';'.join([s.text.strip() for s in tags_el.find_all('a')[1:] if s.text.strip()])
+            else:
+                meta_kw=soup.find('meta',{'name':'keywords'})
+                keyword=meta_kw['content'].replace(',',';') if meta_kw and meta_kw.get('content') else ' '
+            if not keyword:
+                keyword=' '
         except Exception:
             keyword=' '
-            print(f'[中文新聞] 缺少 keyword | url={article_url}') 
 
         try:
             author=soup.find(class_='content_reporter').text.strip()
+            if not author:
+                author=' '
         except Exception:
-            author=' '
-            print(f'[中文新聞] 缺少 author | url={article_url}') 
-
-        #去除script，有偷藏一個在article content裡，不抓圖片解說文字
-        soup.find('div',{'itemprop':'articleBody'}).find('script').decompose()
-
-        for s in soup.find_all(class_='news_img'):
-            s.decompose()
+            try:
+                author_el=soup.select_one('.info .author, .reporter')
+                author=author_el.text.strip() if author_el else ' '
+            except Exception:
+                author=' '
 
         try:
-            content='\n'.join([s.text.strip() for s in soup.find('div',{'itemprop':'articleBody'}).find_all('p')])
+            body=soup.find('div',{'itemprop':'articleBody'})
+            if body:
+                for s in body.find_all('script'):
+                    s.decompose()
+                for s in soup.find_all(class_='news_img'):
+                    s.decompose()
+                content='\n'.join([s.text.strip() for s in body.find_all('p')])
+            else:
+                article_el=soup.select_one('article .content, .news_content')
+                content=article_el.text.strip() if article_el else ' '
+            if not content:
+                content=' '
         except Exception:
             content=' '
             print(f'[中文新聞] 缺少 content | url={article_url}')
 
-        article_id=re.search(string=article_url,pattern=r'view/(\d+-\d+-\d+/\d+)$').group(1)
+        m=re.search(string=article_url,pattern=r'view/(\d+-\d+-\d+/\d+)$')
+        if m:
+            article_id=m.group(1)
+        else:
+            m2=re.search(string=article_url,pattern=r'/(\d+)$')
+            article_id=m2.group(1) if m2 else article_url.split('/')[-1]
 
         return self.build_article_dataframe(
             article_id=article_id, title=title, created_at=created_at,

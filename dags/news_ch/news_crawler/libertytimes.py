@@ -45,63 +45,118 @@ class LibertyTimes(NewsLogic):
         soup=BeautifulSoup(b.text,'lxml')
         
         try:
-            title=soup.find(re.compile('h1|title')).text.strip()
+            title=soup.find('h1').text.strip()
+            if not title:
+                title=soup.find('title').text.strip()
         except Exception:
             title=' '
             print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
         
         try:
-            #created_at
-            created_at=[s.text.strip() for s in soup.find_all(class_='time')]
-            created_at=[s for s in created_at if s != ''][0]
-
-            created_at=re.search(string=created_at,pattern=r'\d+(/|-)\d+(/|-)\d+ \d+:\d+').group(0)
-            created_at=re.sub(string=created_at,pattern='/',repl='-')
-            created_at=format(datetime.datetime.strptime(created_at,'%Y-%m-%d %H:%M'),'%Y-%m-%d %H:%M:%S')
+            meta_time=soup.find('meta',{'property':'article:published_time'})
+            if meta_time and meta_time.get('content'):
+                raw=meta_time['content']
+                dt=datetime.datetime.fromisoformat(raw.replace('Z','+00:00'))
+                created_at=dt.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                meta_pub=soup.find('meta',{'name':'pubdate'})
+                if meta_pub and meta_pub.get('content'):
+                    raw=meta_pub['content']
+                    dt=datetime.datetime.fromisoformat(raw.replace('Z','+00:00'))
+                    created_at=dt.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    time_els=[s.text.strip() for s in soup.find_all(class_=re.compile('time|article_time'))]
+                    time_els=[s for s in time_els if s]
+                    if time_els:
+                        t=re.search(string=time_els[0],pattern=r'\d+[/\-]\d+[/\-]\d+ \d+:\d+')
+                        if t:
+                            raw=t.group(0).replace('/','-')
+                            created_at=format(datetime.datetime.strptime(raw,'%Y-%m-%d %H:%M'),'%Y-%m-%d %H:%M:%S')
+                        else:
+                            created_at=None
+                    else:
+                        created_at=None
         except Exception:
             print(f'[中文新聞] 缺少 created_at | url={article_url}')
             created_at=None
 
         try:
-            img=soup.find('div',class_='photo boxTitle').find('img').get('src')
+            og_img=soup.find('meta',{'property':'og:image'})
+            if og_img and og_img.get('content'):
+                img=og_img['content']
+            else:
+                lazy=soup.find('img',class_='lazy_imgs_ltn')
+                if lazy and lazy.get('data-src'):
+                    img=lazy['data-src']
+                elif soup.find('div',class_='photo boxTitle') and soup.find('div',class_='photo boxTitle').find('img'):
+                    img=soup.find('div',class_='photo boxTitle').find('img').get('src','')
+                else:
+                    img=' '
+            if img and img.startswith('//'):
+                img='https:'+img
         except Exception:
-            try:
-                img=soup.find('span',class_='ph_i').find('img').get('data-original')
-                if bool(re.search(string=img,pattern=r'^//')):
-                    img='https:'+img
-            except Exception:
-                img=' '       
+            img=' '
 
         for i in soup.find_all('img'):
             i.decompose()
         for i in soup.find_all(class_='ph_b ph_d1'):
             i.decompose()
 
-        temp=soup.find('div',{'data-desc':re.compile('內文|內容頁')}).find_all('p',recursive=False)
+        content=' '
+        try:
+            text_node=None
+            wc=soup.select_one('div.whitecon[data-desc="內文"]:not(.template) > div.text')
+            if wc:
+                text_node=wc
+            if not text_node:
+                wc2=soup.select_one('div.whitecon[data-desc="內容頁"]:not(.template) > div.text')
+                if wc2:
+                    text_node=wc2
+            if not text_node:
+                dd=soup.find('div',{'data-desc':re.compile('內文|內容頁')})
+                if dd:
+                    inner=dd.find(class_='text')
+                    text_node=inner if inner else dd
+            if not text_node:
+                text_node=soup.select_one('div.whitecon.article div.text')
+            if not text_node:
+                text_node=soup.select_one('div.whitecon:not(.template) div.text')
 
-        if len(temp) == 0:
-            try:
-                temp=soup.find('div',{'data-desc':re.compile('內文|內容頁')}).find(class_='text').find_all('p',recursive=False)
-            except Exception:
-                temp=soup.find_all(class_='text')
-                temp=[s for s in temp if s.text.strip() != ''][0]
-                temp=temp.find_all('p',recursive=False)        
-
-        temp=[s.text for s in temp if not bool(re.search(string=str(s),pattern=r'before_ir|after_ir|appE1121'))]
-        temp=[s for s in temp if s !='']
-        content='\n'.join(temp)
+            if text_node:
+                temp=text_node.find_all('p',recursive=False)
+                if not temp:
+                    temp=text_node.find_all('p')
+                temp=[s.text for s in temp if not bool(re.search(string=str(s),pattern=r'before_ir|after_ir|appE1121'))]
+                temp=[s for s in temp if s.strip()]
+                content='\n'.join(temp).strip()
+            if not content:
+                content=' '
+        except Exception:
+            print(f'[中文新聞] 缺少 content | url={article_url}')
+            content=' '
         
         try:
             author=re.search(string=content,pattern=r'^(〔|［).{0,30}(〕|］)').group(0)
-            content=re.sub(string=content,pattern=author,repl='')
-            content=re.sub(string=content,pattern=r'^\s+|\s+$',repl='')
+            content=re.sub(string=content,pattern=re.escape(author),repl='').strip()
         except Exception:
             try:
-                author=re.sub(string=soup.find(class_='author').text,pattern=r'^\s+|\s+$',repl='')
+                ae=soup.find(class_='article_edit')
+                if ae:
+                    author=ae.text.strip()
+                else:
+                    ac=soup.find(class_='author')
+                    author=ac.text.strip() if ac else ' '
             except Exception:
                 author=' '
-            print(f'[中文新聞] 缺少 content | url={article_url}')
-            content=' '  
+
+        try:
+            meta_kw=soup.find('meta',{'name':'keywords'})
+            if meta_kw and meta_kw.get('content'):
+                keyword=meta_kw['content'].replace(',',';').strip()
+            else:
+                keyword=' '
+        except Exception:
+            keyword=' '
 
         article_id=re.search(string=article_url,pattern=r'/(\d+)$').group(1)
 

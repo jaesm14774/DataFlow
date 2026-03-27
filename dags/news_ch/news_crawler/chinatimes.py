@@ -4,6 +4,7 @@ import re
 import datetime
 import pandas as pd
 from itertools import chain
+import cloudscraper
 from news_ch.news_crawler.base_process import *
 
 class ChinaTimes(NewsLogic):
@@ -12,30 +13,52 @@ class ChinaTimes(NewsLogic):
     _page=10
     
     def get_article_url_from(self):
-        article_url=[];tag=[]
+        rows=[]
         
-        for page_num in range(0,self._page):
-            a=requests.get(f'{self._domain_url}/realtimenews?page={page_num}&chdtv',
-                          headers=self._headers,timeout=self._timeout)
+        scraper=cloudscraper.create_scraper()
+        for page_num in range(1,self._page+1):
+            a=scraper.get(f'{self._domain_url}/realtimenews?page={page_num}&chdtv',
+                         headers=self._headers,timeout=self._timeout)
             soup=BeautifulSoup(a.text,'lxml')
             
-            article_url.append([self._domain_url+s.find('a').get('href') for s in soup.find_all('h3',class_='title')])
-            
-            tag.append([s.find(class_='category').text for s in soup.find_all('div',class_='meta-info')])
-        
-        article_url=list(chain.from_iterable(article_url))
-        tag=list(chain.from_iterable(tag))        
+            items=soup.select('div.articlebox-compact')
+            if not items:
+                items=soup.find_all('h3',class_='title')
+                for item in items:
+                    a_tag=item.find('a')
+                    if not a_tag:
+                        continue
+                    href=a_tag.get('href','')
+                    if href and not href.startswith('http'):
+                        href=self._domain_url+href
+                    rows.append({'article_url':href,'category':' '})
+            else:
+                for item in items:
+                    a_tag=item.select_one('h3.title a')
+                    if not a_tag:
+                        a_tag=item.find('a')
+                    if not a_tag:
+                        continue
+                    href=a_tag.get('href','')
+                    if href and not href.startswith('http'):
+                        href=self._domain_url+href
+                    cat_el=item.select_one('.meta-info .category')
+                    cat=cat_el.text.strip() if cat_el else ' '
+                    rows.append({'article_url':href,'category':cat})
 
-        TEMP=pd.DataFrame({'source':self._source,
-                           'article_url':article_url,
-                           'category':tag,
-                           'created_at':' ',
-                           'img':' ',
-                           'keyword':' '})
+        if not rows:
+            return pd.DataFrame(columns=['source','article_url','category','created_at','img','keyword'])
+
+        TEMP=pd.DataFrame(rows)
+        TEMP['source']=self._source
+        TEMP['created_at']=' '
+        TEMP['img']=' '
+        TEMP['keyword']=' '
         return TEMP
 
     def get_article_info(self,article_url,tim,img,keyword,category):
-        a=requests.get(article_url,headers=self._headers,timeout=self._timeout)
+        scraper=cloudscraper.create_scraper()
+        a=scraper.get(article_url,headers=self._headers,timeout=self._timeout)
         soup=BeautifulSoup(a.text,'lxml')
         
         try:

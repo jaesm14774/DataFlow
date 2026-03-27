@@ -19,7 +19,13 @@ class CNA(NewsLogic):
         
         tim=[part.find(class_='date').text.replace('/','-') for part in article_list]
         tag=''
-        article_url=[part.find('a').get('href') for part in article_list]
+        raw_urls=[part.find('a').get('href') for part in article_list]
+        article_url=[]
+        for u in raw_urls:
+            if u and not u.startswith('http'):
+                article_url.append('https://www.cna.com.tw' + u)
+            else:
+                article_url.append(u)
         
         img=[]
         for part in article_list:

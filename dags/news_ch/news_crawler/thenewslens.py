@@ -14,41 +14,55 @@ class TheNewsLens(NewsLogic):
     def get_article_url_from(self):
         self._headers['Referer']=self._domain_url
         
-        article_url=[];keyword=[];created_at=[];img=[]
+        rows=[]
 
         for page_num in range(1,self._page+1):
             b=requests.get(f'{self._domain_url}/news?page={page_num}',
                            headers=self._headers,timeout=self._timeout)
             soup=BeautifulSoup(b.text,'lxml')    
 
-            article_url.append([s.find('a').get('href') for s in soup.find_all('h2',class_='title')])
+            items=soup.select('section.item-wrapper.list-item')
+            if not items:
+                items_old=soup.find_all('h2',class_='title')
+                for h2 in items_old:
+                    a_tag=h2.find('a')
+                    if a_tag:
+                        rows.append({'article_url':a_tag.get('href',''),'keyword':' ','created_at':' ','img':' '})
+                continue
 
-            for s in soup.find_all('div',class_='col-sm-8'):
-                temp_keyword=[]
+            for sec in items:
+                a_tag=sec.select_one('h3.item-title a[href]')
+                if not a_tag:
+                    a_tag=sec.select_one('a.img-link[href]')
+                if not a_tag:
+                    continue
+                url=a_tag.get('href','')
+                if url and not url.startswith('http'):
+                    url=self._domain_url+url
 
-                try:
-                    for part in s.find(class_='tags-box').find_all('a',{'data-gtm-label':'tag'}):
-                        temp_keyword.extend([part.text.strip()])
-                except Exception:
-                    temp_keyword=[' ']
+                time_el=sec.select_one('time.time')
+                if time_el:
+                    t_text=time_el.text.strip().split('|')[0].strip().replace('/','-')
+                else:
+                    t_text=' '
 
-                keyword.append([';'.join(temp_keyword)])
+                img_el=sec.select_one('img.img-cover')
+                img_url=img_el.get('src','') if img_el else ' '
 
-            created_at.append([s.find(class_='time').text.split('|')[0].strip().replace('/','-') for s in soup.find_all(class_='info-box')])
+                kw_tags=sec.select('ul.tags-wrapper a.hashtag, ul.tags-wrapper a')
+                if kw_tags:
+                    kw=';'.join([t.text.strip() for t in kw_tags if t.text.strip()])
+                else:
+                    kw=' '
 
-            img.append([s.find('img').get('data-srcset').split(', ')[-1].strip() for s in soup.find_all(class_='img-box')])
+                rows.append({'article_url':url,'keyword':kw,'created_at':t_text,'img':img_url})
 
-        article_url=list(chain.from_iterable(article_url))  
-        keyword=list(chain.from_iterable(keyword))
-        created_at=list(chain.from_iterable(created_at))
-        img=list(chain.from_iterable(img))
+        if not rows:
+            return pd.DataFrame(columns=['source','article_url','category','created_at','img','keyword'])
 
-        TEMP=pd.DataFrame({'source':[self._source]*len(article_url),
-                           'article_url':article_url,
-                           'category':' ',
-                           'created_at':created_at,
-                           'img':img,
-                           'keyword':keyword})   
+        TEMP=pd.DataFrame(rows)
+        TEMP['source']=self._source
+        TEMP['category']=' '
 
         return TEMP
 
@@ -67,45 +81,79 @@ class TheNewsLens(NewsLogic):
             title=' '
 
         try:
-            category=soup.find(class_=re.compile('article.*-box')).find(class_=re.compile('d-inline|cate')).text
-            category=category.strip()
+            cat_el=soup.select_one('.item-froms a[href*="/category/"], .article-info a[href*="/category/"]')
+            if cat_el:
+                category=cat_el.text.strip()
+            else:
+                cat_el2=soup.find(class_=re.compile('article.*-box'))
+                if cat_el2:
+                    c=cat_el2.find(class_=re.compile('d-inline|cate'))
+                    category=c.text.strip() if c else ' '
+                else:
+                    category=' '
         except Exception:
-            print(f'[中文新聞] 缺少 category | url={article_url}')
             category=' '
 
         try:
-            tim=datetime.datetime.strptime(tim,'%Y-%m-%d').strftime('%Y-%m-%d %H:%M:%S')
-
-            created_at=tim
+            if tim and tim.strip() and tim.strip()!=' ':
+                tim_clean=tim.strip()
+                for fmt in ['%Y-%m-%d','%Y-%m-%d %H:%M:%S','%Y-%m-%d %H:%M']:
+                    try:
+                        created_at=datetime.datetime.strptime(tim_clean,fmt).strftime('%Y-%m-%d %H:%M:%S')
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    created_at=None
+            else:
+                created_at=None
         except Exception:
-            print(f'[中文新聞] 時間欄位無法解析 | url={article_url}')
             created_at=None
 
         try:
-            author=soup.find(class_=re.compile('author-name')).text.strip()
+            auth_el=soup.select_one('.author-wrapper a.author, a.author, .author-name, [class*="author-name"]')
+            author=auth_el.text.strip() if auth_el else ' '
+            if not author:
+                meta_a=soup.find('meta',{'name':'author'})
+                author=meta_a['content'].strip() if meta_a and meta_a.get('content') else ' '
         except Exception:
-            print(f'[中文新聞] 缺少 author | url={article_url}')
             author=' '
 
         for s in soup.find_all(re.compile('img|figure|script')):
             s.decompose()
 
         try:
-            summary=soup.find(class_='WhyNeedKnow').text
+            summary_el=soup.find(class_='WhyNeedKnow')
+            summary=summary_el.text if summary_el else ''
         except Exception:
             summary=''
 
         try:
-            content='\n'.join([s.text for s in soup.find(class_='article-content').find_all('p')])
+            body=soup.select_one('section[id^="article-content-"]')
+            if not body:
+                body=soup.select_one('section.article-body')
+            if not body:
+                body=soup.select_one('.article-content, .article-body-content')
+            if body:
+                paras=body.select('p.ck-section')
+                if not paras:
+                    paras=body.find_all('p')
+                content='\n'.join([s.text for s in paras if s.text.strip()])
+            else:
+                content=' '
         except Exception:
-            print(f'[中文新聞] 缺少 content | url={article_url}')
-            content=' '    
+            content=' '
 
-        content=summary+'\n\n\n\n\n'+content
+        if summary and content!=' ':
+            content=summary+'\n'+content
+        elif summary:
+            content=summary
 
-        keyword=keyword
+        if not content or not content.strip():
+            content=' '
 
-        article_id=re.search(string=article_url,pattern=r'/(\d+)$').group(1)
+        m=re.search(string=article_url,pattern=r'/(\d+)$')
+        article_id=m.group(1) if m else article_url.split('/')[-1]
 
         return self.build_article_dataframe(
             article_id=article_id, title=title, created_at=created_at,

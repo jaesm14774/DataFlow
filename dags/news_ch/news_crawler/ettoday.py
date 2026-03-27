@@ -107,17 +107,28 @@ class ETtoday(NewsLogic):
         #title
         title=soup.find('h1',class_=re.compile('title')).text.strip()
         
-        if soup.find(class_='tag') is not None:
-            keyword=[s.text.strip() for s in soup.find(class_='tag').find_all('a')]
-            keyword=[s for s in keyword if s !='']
-            keyword=';'.join(keyword)
-        else:
-            try:
-                keyword=[s.text.strip() for s in soup.find(class_='part_keyword').find_all('a')]
-                keyword=[s for s in keyword if s !='']
-                keyword=';'.join(keyword)           
-            except Exception:
-                keyword=' '
+        keyword=' '
+        try:
+            tag_div=soup.select_one('div[class*="part_tag"] ')
+            if tag_div:
+                keyword=[s.text.strip() for s in tag_div.find_all('a')]
+                keyword=[s for s in keyword if s]
+                keyword=';'.join(keyword)
+            if not keyword or keyword==' ':
+                meta_kw=soup.find('meta',{'name':'news_keywords'})
+                if meta_kw and meta_kw.get('content'):
+                    keyword=meta_kw['content'].replace(',',';').strip()
+            if not keyword or keyword==' ':
+                if soup.find(class_='tag') is not None:
+                    keyword=[s.text.strip() for s in soup.find(class_='tag').find_all('a')]
+                    keyword=[s for s in keyword if s]
+                    keyword=';'.join(keyword) if keyword else ' '
+                elif soup.find(class_='part_keyword') is not None:
+                    keyword=[s.text.strip() for s in soup.find(class_='part_keyword').find_all('a')]
+                    keyword=[s for s in keyword if s]
+                    keyword=';'.join(keyword) if keyword else ' '
+        except Exception:
+            keyword=' '
         
         if soup.find('div',class_='part_menu_5 clearfix') is not None:
             try:

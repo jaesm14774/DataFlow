@@ -45,7 +45,8 @@ DataFlow is designed to streamline the collection and processing of financial da
 │   ├── game/               # Game-related data collection (pre-registration & new releases)
 │   ├── lib/                # Core library functions
 │   ├── news_ch/            # Chinese news collection
-│   │   └── news_crawler/   # News crawling modules
+│   │   ├── utils.py        # Pure helpers (URL validation, text/time cleanup)
+│   │   └── news_crawler/   # 一站一檔（anue.py, ettoday.py, ...），__init__.py 統一匯出
 │   ├── ptt/                # PTT (Taiwanese forum) collection
 │   ├── stock/              # Stock data collection and analysis
 │   │   └── error/          # Error handling for stock collection
@@ -66,6 +67,14 @@ DataFlow is designed to streamline the collection and processing of financial da
 - **[dags/news_ch/](./dags/news_ch/)**: Modules for collecting news from various Chinese news sources.
 - **[dags/stock/](./dags/stock/)**: Components for collecting and analyzing stock market data.
 - **[plugins/](./plugins/)**: Custom Airflow plugins and external tools used by the system.
+
+## Cursor Agent Skills
+
+本儲存庫在 `.cursor/skills/` 提供專案層級 Cursor Skill（與 Airflow DAG 無關時可忽略）。
+
+| Skill | 說明 |
+|-------|------|
+| `component-refactoring` | 適用 **Dify 前端** `web/`：高複雜度 React 元件重構（hooks 抽出、子元件拆分、`pnpm analyze-component` / `pnpm refactor-component`）。主檔：`.cursor/skills/component-refactoring/SKILL.md`，細節見 `references/`。 |
 
 ## External Libraries and Resources
 
@@ -119,6 +128,18 @@ BACKFILL_DATE = '2026-03-16'
 - 回補完畢務必改回 `BACKFILL_DATE = None`
 
 ## Recent Fixes
+
+### 2026-03-23: news_ch 模組重構
+
+**架構改善：**
+- `news_crawler/module.py`（1611 行）拆成一個爬蟲一個檔案（16 檔），由 `__init__.py` 統一匯出；`all_news.py` / `save_money.py` 改為 explicit import
+
+**Bug 修復：**
+- `base_process.py` — `_headers` 原為 class attribute（共用 mutable dict），任一爬蟲修改 `Referer` 會影響其他爬蟲；改為 `__init__` 內建立 instance attribute，每個實例獨立
+- `base_process.py` — `_now_time` 原在 class 定義時就固定，改為實例建立時計算，`create_time` 更準確
+
+**清理：**
+- `save_money.py` — 移除 3 處不必要的 `global table_name`（函式內只讀取模組變數，無需 global）
 
 ### 2026-03-21: DAG 日誌優化與月營收重試修正
 

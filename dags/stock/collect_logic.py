@@ -11,51 +11,23 @@ import random
 from math import sin, asin, cos, radians, fabs, sqrt
 from ast import literal_eval #避免geometry那欄變成str
 import googlemaps #google api 查詢經緯度
-from urllib.parse import quote_plus
-from sqlalchemy import create_engine
-import pymysql
 from stock.config.config import *
 import cv2
 import tensorflow as tf
 from stock.utilities_tf2 import preprocessing, one_hot_decoding
 from lib.log_process_execution import BaseLogRecord
-import MySQLdb
+from lib.db_connection import MySQLConnection as _BaseMySQLConnection
 import boto3
 
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"]="python"
 
-class MySQLConnection:
-    db_name=DB_NAME
-    
-    def __init__(self,sql_configure_path):
-        self.connection=pd.read_csv(sql_configure_path,index_col='name')
-        """
-        host:server ip of sql
-        port:port sql
-        user:user name of sql
-        password:password of sql user
-        db_name:name of database
-        """
-        host=self.connection.loc['host','value']
-        port=int(self.connection.loc['port','value'])
-        user=self.connection.loc['user','value']
-        password=self.connection.loc['password','value']
-        
-        self.conn=pymysql.connect(host=host,
-                                 port=int(port),
-                                 user=user,
-                                 password=password,
-                                 db=self.db_name)
-        
-        self.cursor=self.conn.cursor()
-        
-        self.engine = create_engine('mysql+mysqldb://%s:%s@%s:%s/%s?charset=utf8mb4' % 
-                                   (user,quote_plus(password),host,port,self.db_name))
-        
-    def end(self):
-        self.conn.close()
-        self.engine.dispose()
+
+class MySQLConnection(_BaseMySQLConnection):
+    """stock 專用：繼承統一版 MySQLConnection，預設使用 stock config 的 DB_NAME。"""
+
+    def __init__(self, sql_configure_path=None):
+        super().__init__(db_name=DB_NAME, sql_configure_path=sql_configure_path or globals().get('sql_configure_path'))
 
 
 class StockCollectLogic(MySQLConnection):
@@ -115,7 +87,7 @@ class StockCollectLogic(MySQLConnection):
         """
         try:
             txt=str(txt).strip()
-        except:
+        except Exception:
             pass
 
         if isinstance(txt,str):
@@ -124,10 +96,10 @@ class StockCollectLogic(MySQLConnection):
             if output_not_string:
                 try:
                     return int(txt)
-                except:
+                except Exception:
                     try:
                         return float(txt)
-                    except:
+                    except Exception:
                         return np.nan
             else:
                 return txt
@@ -147,7 +119,7 @@ class StockCollectLogic(MySQLConnection):
         elif len(dt) == 10: #西元年
             dt=dt
         else:
-            assert f'沒看過的日期格式:{dt}'
+            raise ValueError(f'沒看過的日期格式: {dt}')
 
         dt=dt.replace('/','-')
         return dt
@@ -403,7 +375,7 @@ class StockRenwInfoProcess(MySQLConnection):
         try:
             if soup.find('h3').text.strip() == '此公司代號不存在或公司未申報基本資料！':
                 return
-        except:
+        except Exception:
             pass
 
         temp=soup.find('table').find_next('table')
@@ -499,7 +471,7 @@ class StockAllCodeInfoCollectProcess(StockCollectLogic):
                     ed=i
                 else:
                     continue
-            except:
+            except Exception:
                 continue
         temp=temp[(st+1):ed]
         temp=[part_row for part_row in temp if len(part_row.find_all('td')) == 7] #排除錯誤的row
@@ -528,7 +500,7 @@ class StockAllCodeInfoCollectProcess(StockCollectLogic):
                     ed=i
                 else:
                     continue
-            except:
+            except Exception:
                 continue
         temp=tb.find_all('tr')[(st+1):ed]
         temp=[part_row for part_row in temp if len(part_row.find_all('td')) == 7] #排除錯誤的row

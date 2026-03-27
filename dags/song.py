@@ -173,7 +173,7 @@ def get_song_info(song_url):
     try:
         if bool(re.search(string=content[0],pattern=r'^Sung by')):
             content=content[1:]
-    except:
+    except Exception:
         temp=pd.DataFrame({
                 'song_url':song_url,
                 'content':'  '

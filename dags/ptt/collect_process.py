@@ -207,7 +207,7 @@ class PttScraper:
         try:
             IP = re.search(string=content[-1], pattern=r'\d+\.\d+\.\d+\.\d+').group(0)
             content = content[:-1]
-        except:
+        except Exception:
             IP = ''
 
         return IP

@@ -6,6 +6,7 @@ import pandas as pd
 from itertools import chain
 import cloudscraper
 from news_ch.news_crawler.base_process import *
+from news_ch.news_crawler.page_utils import meta, published_time
 
 class ChinaTimes(NewsLogic):
     _source='中時日報'
@@ -59,6 +60,7 @@ class ChinaTimes(NewsLogic):
     def get_article_info(self,article_url,tim,img,keyword,category):
         scraper=cloudscraper.create_scraper()
         a=scraper.get(article_url,headers=self._headers,timeout=self._timeout)
+        a.raise_for_status()
         soup=BeautifulSoup(a.text,'lxml')
         
         try:
@@ -69,8 +71,9 @@ class ChinaTimes(NewsLogic):
             title=' '
         
         try:
-            created_at=soup.find('time').get('datetime')
-            created_at=format(datetime.datetime.strptime(created_at,'%Y-%m-%d %H:%M'),'%Y-%m-%d %H:%M:%S')
+            created_at=published_time(meta(soup,'article:published_time'))
+            if not created_at:
+                created_at=published_time(soup.find('time').get('datetime'))
         except Exception:
             print(f'[中文新聞] 缺少 created_at | url={article_url}')
             created_at=None

@@ -15,6 +15,7 @@ table_name = 'save_money'
 #初始化log
 log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
                          app_name=app_name)
+_default_log_record = log_record
 
 task_dict={
     1: CP(),
@@ -26,17 +27,23 @@ source_dict={}
 for i in range(1,len(task_dict)+1):
     source_dict[task_dict[i]._source]=task_dict[i]
 
-#連接mysql
-#read sql config
-connection=pd.read_csv(sql_configure_path,index_col='name')
-conn,cursor,engine=get_sql(connection.loc['host','value'],
-                           int(connection.loc['port','value']),
-                           connection.loc['user','value'],
-                           connection.loc['password','value'],database_name)
+conn=cursor=engine=None
 
-before_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]
-log_record.set_before_count(before_count)
-print(f'[優惠情報] DB 既有筆數={before_count}')
+def _ensure_runtime(count_before=False,record=None):
+    global conn,cursor,engine
+    if conn is None or not getattr(conn,'open',False):
+        connection=pd.read_csv(sql_configure_path,index_col='name')
+        conn,cursor,engine=get_sql(connection.loc['host','value'],
+                                   int(connection.loc['port','value']),
+                                   connection.loc['user','value'],
+                                   connection.loc['password','value'],database_name)
+    if count_before:
+        before_count=pd.read_sql_query(
+            f'select count(1) as N from {table_name}',engine
+        )['N'].iloc[0]
+        (record or _default_log_record).set_before_count(before_count)
+        print(f'[優惠情報] DB 既有筆數={before_count}')
+    return conn,cursor,engine
 
 
 #news ch notify
@@ -45,7 +52,9 @@ token=token.loc['好康報','token']
 save_money_ch_notify=DiscordNotify()
 save_money_ch_notify.webhook_url=token
 
-def collect_news(conn,cursor,engine,log_record):
+def collect_news(conn=None,cursor=None,engine=None,log_record=None):
+    conn,cursor,engine=_ensure_runtime()
+    log_record=log_record or _default_log_record
     _key_columns=['article_id','source']
     
     try:
@@ -75,7 +84,9 @@ def collect_news(conn,cursor,engine,log_record):
         print(f'[優惠情報] 收集失敗 | {type(e).__name__}: {e}')
         raise e        
 
-def delete_and_insert(conn,cursor,engine,log_record):
+def delete_and_insert(conn=None,cursor=None,engine=None,log_record=None):
+    conn,cursor,engine=_ensure_runtime(count_before=True,record=log_record)
+    log_record=log_record or _default_log_record
     try:
         delete_sql=f"""
         delete tb from {table_name} as tb
@@ -110,7 +121,8 @@ def delete_and_insert(conn,cursor,engine,log_record):
     finally:
         log_record.insert_to_log_record()
 
-def notification(conn,cursor,engine):
+def notification(conn=None,cursor=None,engine=None):
+    conn,cursor,engine=_ensure_runtime()
     _key_columns=['article_id','source']
     notification_table_name = 'notification_record'
     

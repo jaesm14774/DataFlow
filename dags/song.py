@@ -42,15 +42,22 @@ log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelt
                          app_name=app_name)
 
 #連接mysql
-connection=pd.read_csv(sql_configure_path,index_col='name')
-conn,cursor,engine=get_sql(connection.loc['host','value'],
-                           int(connection.loc['port','value']),
-                           connection.loc['user','value'],
-                           connection.loc['password','value'],database_name)
+conn=cursor=engine=None
 
-
-before_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]
-log_record.set_before_count(before_count)
+def _ensure_runtime(count_before=False):
+    global conn,cursor,engine
+    if conn is None or not getattr(conn,'open',False):
+        connection=pd.read_csv(sql_configure_path,index_col='name')
+        conn,cursor,engine=get_sql(connection.loc['host','value'],
+                                   int(connection.loc['port','value']),
+                                   connection.loc['user','value'],
+                                   connection.loc['password','value'],database_name)
+    if count_before:
+        before_count=pd.read_sql_query(
+            f'select count(1) as N from {table_name}',engine
+        )['N'].iloc[0]
+        log_record.set_before_count(before_count)
+    return conn,cursor,engine
 
 
 def get_song_from_month(date):
@@ -97,6 +104,7 @@ def grab_id(url):
     return re.search(string=url,pattern=r'(tw[A-z0-9]+)\.htm').group(1)
 
 def get_song_url_data():
+    _ensure_runtime()
     deter=pd.read_sql_query(f'select * from {table_name} order by publishDate desc limit 8000',engine)
     df=[]
     tt=deter.publishDate.iloc[0]
@@ -240,6 +248,7 @@ def get_song_info(song_url):
     },index=[1])
 
 def get_song_content_and_delete_insert():
+    _ensure_runtime(count_before=True)
     df=pd.read_sql_query('select * from song_url_data',engine)
     
     rs=[]

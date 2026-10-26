@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import datetime
+import json
 import pandas as pd
 from news_ch.news_crawler.base_process import *
 
@@ -110,7 +111,48 @@ class PTS(NewsLogic):
             author=' '
             print(f'[中文新聞] 缺少 author | url={article_url}')     
 
-        created_at=soup.find('time').text
+        published_at=None
+        time_tag=soup.find('time')
+        if time_tag:
+            published_at=time_tag.get('datetime') or time_tag.get_text(' ',strip=True)
+        if not published_at:
+            published_meta=soup.find('meta',{'property':'article:published_time'})
+            if published_meta:
+                published_at=published_meta.get('content')
+        if not published_at:
+            for script in soup.find_all('script',{'type':'application/ld+json'}):
+                try:
+                    payload=json.loads(script.string or script.get_text())
+                except (TypeError,ValueError):
+                    continue
+                pending=[payload]
+                while pending and not published_at:
+                    node=pending.pop()
+                    if isinstance(node,dict):
+                        published_at=node.get('datePublished')
+                        pending.extend(
+                            value for value in node.values()
+                            if isinstance(value,(dict,list))
+                        )
+                    elif isinstance(node,list):
+                        pending.extend(node)
+
+        created_at=None
+        if published_at:
+            published_text=str(published_at).strip()
+            try:
+                parsed_at=datetime.datetime.fromisoformat(
+                    published_text.replace('Z','+00:00')
+                )
+                if parsed_at.tzinfo:
+                    parsed_at=parsed_at.astimezone(
+                        datetime.timezone(datetime.timedelta(hours=8))
+                    ).replace(tzinfo=None)
+                created_at=parsed_at.strftime('%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                created_at=published_text
+        if not created_at:
+            print(f'[中文新聞] 缺少 created_at | url={article_url}')
         
         if img == '':
             img=' '

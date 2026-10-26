@@ -3,6 +3,8 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import json
 import datetime
+import hashlib
+from functools import wraps
 from common.config import sql_configure_path, discord_token_path, chrome_driver_path
 from lib.get_sql import get_sql
 from lib.notify import DiscordNotify
@@ -26,22 +28,41 @@ source = 'Money101'
 log_record = BaseLogRecord(process_date=(datetime.datetime.now() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
                            app_name=app_name)
  
-connection = pd.read_csv(sql_configure_path, index_col='name')
-conn, cursor, engine = get_sql(connection.loc['host', 'value'],
-                               int(connection.loc['port', 'value']),
-                               connection.loc['user', 'value'],
-                               connection.loc['password', 'value'], database_name)
+conn = cursor = engine = None
+
+def _ensure_database_connection():
+    global conn, cursor, engine
+    if conn is None or not getattr(conn, 'open', False):
+        connection = pd.read_csv(sql_configure_path, index_col='name')
+        conn, cursor, engine = get_sql(
+            connection.loc['host', 'value'], int(connection.loc['port', 'value']),
+            connection.loc['user', 'value'], connection.loc['password', 'value'],
+            database_name,
+        )
+
+def _close_database_connection():
+    global conn, cursor, engine
+    if conn is not None and getattr(conn, 'open', False):
+        conn.close()
+    if engine is not None:
+        engine.dispose()
+    conn = cursor = engine = None
+
+def _with_database_connection(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        _ensure_database_connection()
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _close_database_connection()
+    return wrapped
  
 # 設定 Discord token
 token = pd.read_csv(discord_token_path, encoding='utf_8_sig', index_col='name')
 token = token.loc['信用卡', 'token']
 notify = DiscordNotify()
 notify.webhook_url = token
-
-# 取得處理前的數量
-before_count = pd.read_sql_query(f'SELECT COUNT(id) AS N FROM {table_name}', engine)['N'].iloc[0]
-log_record.set_before_count(before_count)
-print(f'信用卡，處理前總數為 : {before_count}')
 
 def _get_chrome_driver():
     """初始化 Chrome WebDriver"""
@@ -65,7 +86,6 @@ def extract_card_info(part):
         if not card_name_el:
             return None
         card_name = card_name_el.get_text(strip=True)
-        card_id = quote(card_name)
 
         # 2. 提取卡面圖片
         img_el = part.find('img')
@@ -128,6 +148,14 @@ def extract_card_info(part):
             a_tag = part.find('a', href=True)
             if a_tag:
                 apply_url = a_tag['href']
+
+        # Keep the historical name-based ID when it fits the schema. For
+        # long titles, use a deterministic compact ID instead of overflowing
+        # credit_cards.card_id (varchar(256)).
+        card_id = quote(card_name)
+        if len(card_id) > 256:
+            card_identity = apply_url or card_name
+            card_id = hashlib.sha256(card_identity.encode('utf-8')).hexdigest()
 
         # 7. 詳細描述 (List items)
         detail_text = ""
@@ -293,8 +321,12 @@ def fetch_card_data(**kwargs):
         if driver:
             driver.quit()
 
+@_with_database_connection
 def write_to_sql(**kwargs):
     data = kwargs['ti'].xcom_pull(key='credit_card_data', task_ids='fetch_card_data')
+    if not data:
+        raise ValueError('Money101 returned no credit-card records')
+
     df = pd.DataFrame(data)
     df = df.drop_duplicates(['card_id'])
     df['source'] = source
@@ -303,6 +335,8 @@ def write_to_sql(**kwargs):
         # 找出新資料，需要不在資料表 或是 距離資料庫建立時間超過6個月以上
         # 查詢現有的 card_id
         existing_ids = pd.read_sql(f'SELECT card_id, create_time FROM {table_name}', con=engine)
+        before_count = len(existing_ids)
+        log_record.set_before_count(before_count)
         existing_ids['create_time'] = pd.to_datetime(existing_ids['create_time'])
         existing_ids['create_time'] = existing_ids['create_time'].dt.date
 
@@ -333,17 +367,18 @@ def write_to_sql(**kwargs):
         new_df.to_sql(table_name, engine, index=False, if_exists='append')
 
         log_record.set_insert_count(len(new_df))
-        log_record.set_delete_count = len(old_data)
-        log_record.set_after_count = before_count + len(new_df) - len(old_data)
-        log_record.set_update_count = 0
+        log_record.set_delete_count(len(old_data))
+        log_record.set_after_count(before_count + len(new_df) - len(old_data))
+        log_record.set_update_count(0)
     except Exception as e:
-        log_record.error_message(f'信用卡，寫入資料庫失敗 : {e}')
+        log_record.raise_error(f'信用卡，寫入資料庫失敗 : {e}')
         raise e
     finally:
         log_record.insert_to_log_record()
         conn.close()
         engine.dispose()
 
+@_with_database_connection
 def notify_new_card(**kwargs):
     # 獲取已通知的資料
     already_notified = pd.read_sql(f'SELECT card_id, source, notification_time FROM {notification_table_name}', con=engine)

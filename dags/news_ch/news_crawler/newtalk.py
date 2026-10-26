@@ -3,70 +3,53 @@ from bs4 import BeautifulSoup
 import re
 import datetime
 import pandas as pd
+import json
+from urllib.parse import urljoin
 from news_ch.news_crawler.base_process import *
 
 class NewTalk(NewsLogic):
     _source='newtalk'
     _domain_url='https://newtalk.tw'
-    _now_date=datetime.datetime.now().strftime('%Y-%m-%d')
     
     def get_article_url_from(self):
-        a=requests.get(f'{self._domain_url}/news/summary/{self._now_date}',
-                      headers=self._headers,timeout=self._timeout)
-        a.encoding='utf8'
-        
-        soup=BeautifulSoup(a.text,'lxml')
+        taipei_tz=datetime.timezone(datetime.timedelta(hours=8))
+        list_date=datetime.datetime.now(taipei_tz).strftime('%Y-%m-%d')
+        response=requests.get(
+            f'{self._domain_url}/news/summary/{list_date}/1',
+            headers=self._headers,timeout=self._timeout,
+        )
+        response.raise_for_status()
+        response.encoding='utf8'
+        soup=BeautifulSoup(response.text,'lxml')
 
-        url=[];tag=[];Time=[];img=[]
-
-        items=soup.find_all(class_='news-list-item clearfix')
-        if not items:
-            news_ul=soup.select_one('ul.category-list')
-            if news_ul:
-                items=news_ul.find_all('li',class_=lambda c: c and 'hover-parent-image-scale' in c)
-            else:
-                items=[]
-
-        for part in items:
-            try:
-                date_el=part.find(class_='news_date') or part.find('p',class_='date')
-                if not date_el:
-                    continue
-                t=date_el.text
-                t=re.sub(r'^.*發布\s*','',t).strip()
-                t1_m=re.search(r'\d+\.\d+\.\d+',t)
-                t2_m=re.search(r'\d+:\d+',t)
-                if not t1_m or not t2_m:
-                    continue
-                t1=t1_m.group(0)
-                t2=t2_m.group(0)
-            except Exception:
+        rows=[]
+        seen=set()
+        for a_tag in soup.select('a[href*="/news/view/"]'):
+            href=urljoin(self._domain_url,a_tag.get('href','').strip())
+            if not re.search(r'^https://newtalk\.tw/news/view/\d{4}-\d{2}-\d{2}/\d+$',href):
                 continue
-            
-            a_tag=part.select_one('a[href*="/news/view/"]') or part.find('a')
-            if not a_tag:
+            if href in seen:
                 continue
-            href=a_tag.get('href','')
-            if href and not href.startswith('http'):
-                href=self._domain_url+href
-            url.append(href)
-
-            tag.append(' ')
-            Time.append(t1+' '+t2)
-
-            img_el=part.find('img')
-            if img_el:
-                img.append(img_el.get('data-src') or img_el.get('src') or '')
-            else:
-                img.append('')
-
-        TEMP=pd.DataFrame({'source':self._source,
-                           'article_url':url,
-                           'category':' ',
-                           'created_at':Time,
-                           'img':img,
-                           'keyword':' '})      
-        return TEMP
+            seen.add(href)
+            card=a_tag.find_parent('article') or a_tag.parent
+            img_el=card.find('img') if card else None
+            category_el=card.select_one('.type,.category') if card else None
+            rows.append({
+                'source':self._source,
+                'article_url':href,
+                'category':category_el.get_text(' ',strip=True) if category_el else ' ',
+                # The current list page does not carry a dependable article time.
+                # get_article_info reads the article's published-time metadata.
+                'created_at':'',
+                'img':(
+                    img_el.get('data-src') or img_el.get('src') or ''
+                    if img_el else ''
+                ),
+                'keyword':' ',
+            })
+        return pd.DataFrame(rows,columns=[
+            'source','article_url','category','created_at','img','keyword'
+        ])
 
     def get_article_info(self,article_url,tim,img,keyword,category):
         b=requests.get(article_url,headers=self._headers,timeout=self._timeout)
@@ -79,7 +62,43 @@ class NewTalk(NewsLogic):
             title=' '
             print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')     
 
-        created_at=tim.replace('.','-')
+        published_at=None
+        time_tag=soup.find('time')
+        if time_tag:
+            published_at=time_tag.get('datetime') or time_tag.get_text(' ',strip=True)
+        if not published_at:
+            for script in soup.find_all('script',{'type':'application/ld+json'}):
+                try:
+                    payload=json.loads(script.string or script.get_text())
+                except (TypeError,ValueError):
+                    continue
+                pending=[payload]
+                while pending and not published_at:
+                    node=pending.pop()
+                    if isinstance(node,dict):
+                        published_at=node.get('datePublished')
+                        pending.extend(
+                            value for value in node.values()
+                            if isinstance(value,(dict,list))
+                        )
+                    elif isinstance(node,list):
+                        pending.extend(node)
+
+        created_at=None
+        if published_at:
+            try:
+                parsed_at=datetime.datetime.fromisoformat(
+                    str(published_at).strip().replace('Z','+00:00')
+                )
+                if parsed_at.tzinfo:
+                    parsed_at=parsed_at.astimezone(
+                        datetime.timezone(datetime.timedelta(hours=8))
+                    ).replace(tzinfo=None)
+                created_at=parsed_at.strftime('%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                created_at=None
+        if not created_at:
+            print(f'[中文新聞] 缺少有效 published_at | url={article_url}')
 
         try:
             tags_el=soup.find(class_='tags')

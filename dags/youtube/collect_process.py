@@ -17,16 +17,22 @@ table_name = 'youtube_video'
 log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
                          app_name=app_name)
 
-#連接mysql
-connection=pd.read_csv(sql_configure_path,index_col='name')
-conn,cursor,engine=get_sql(connection.loc['host','value'],
-                           int(connection.loc['port','value']),
-                           connection.loc['user','value'],
-                           connection.loc['password','value'], database_name)
+conn=cursor=engine=None
 
-before_count=pd.read_sql_query(f'select count(id) as N from {table_name}',engine)['N'].iloc[0]
-log_record.set_before_count(before_count)
-print(f'[Youtube] DB 既有影片筆數={before_count}')
+def _ensure_runtime():
+    global conn,cursor,engine
+    if conn is None or not getattr(conn,'open',False):
+        connection=pd.read_csv(sql_configure_path,index_col='name')
+        conn,cursor,engine=get_sql(connection.loc['host','value'],
+                                   int(connection.loc['port','value']),
+                                   connection.loc['user','value'],
+                                   connection.loc['password','value'], database_name)
+        before_count=pd.read_sql_query(
+            f'select count(id) as N from {table_name}',engine
+        )['N'].iloc[0]
+        log_record.set_before_count(before_count)
+        print(f'[Youtube] DB 既有影片筆數={before_count}')
+    return conn,cursor,engine
 
 youtube_key_list=pd.read_csv(youtube_token_path)['token'].tolist()
 
@@ -672,5 +678,6 @@ class YoutubeCrawler():
             engine.dispose()
 
 def collect_all_youtube():
+    _ensure_runtime()
     process=YoutubeCrawler()
     process.etl_process()

@@ -31,9 +31,19 @@ class StockInternationalCollectProcess(StockCollectLogic):
     app_name='stock_market_index'
     
     def transform_time(self,x,now_year):
-        x=now_year+'/'+x
-        
-        return datetime.datetime.strptime(x,'%Y/%m/%d %H:%M').strftime('%Y-%m-%d %H:%M:%S')
+        raw_time=str(x).strip()
+        candidates=[
+            (raw_time,'%Y/%m/%d %H:%M'),
+            (raw_time,'%Y-%m-%d %H:%M'),
+            (f'{now_year}/{raw_time}','%Y/%m/%d %H:%M'),
+            (f'{self.now_time.strftime("%Y/%m/%d")} {raw_time}','%Y/%m/%d %H:%M'),
+        ]
+        for value,time_format in candidates:
+            try:
+                return datetime.datetime.strptime(value,time_format).strftime('%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                continue
+        raise ValueError(f'Unsupported Yahoo index timestamp: {raw_time!r}')
     
     def collect(self):
         """
@@ -63,8 +73,10 @@ class StockInternationalCollectProcess(StockCollectLogic):
         })
         data['create_date']=self.now_time.strftime('%Y-%m-%d')
 
-        for s in ['close','diff','variety','open','yesterday_close','max','min']:
-            data[s]=data[s].map(self.clean_comma)
+        numeric_columns=['close','diff','open','yesterday_close','max','min']
+        for s in numeric_columns:
+            data[s]=data[s].map(lambda value: self.clean_comma(value,output_not_string=True))
+        data['variety']=data['variety'].map(self.clean_comma)
 
         #修改時間格式
         y=format(self.now_time,'%Y')
@@ -168,6 +180,7 @@ def interantional_stock():
 
 with DAG(
     dag_id='stock_international_stock_process',
+    description='每日收集並更新國際市場指數與行情資料。',
     default_args=default_args,
     schedule='20 22 * * 1,2,3,4,5,0',
     catchup=False

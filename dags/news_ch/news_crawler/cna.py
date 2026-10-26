@@ -4,6 +4,7 @@ import re
 import datetime
 import pandas as pd
 from news_ch.news_crawler.base_process import *
+from news_ch.news_crawler.page_utils import meta, published_time
 
 class CNA(NewsLogic):
     _source='中央社'
@@ -44,6 +45,7 @@ class CNA(NewsLogic):
         self._headers['Referer']='https://www.google.com.tw/?hl=zh_TW'
         
         b=requests.get(article_url,headers=self._headers,timeout=self._timeout)
+        b.raise_for_status()
         soup=BeautifulSoup(b.text,'lxml')
         
         try:
@@ -52,7 +54,7 @@ class CNA(NewsLogic):
             title=' '
             print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')       
 
-        created_at=tim
+        created_at=published_time(meta(soup,'article:published_time')) or published_time(tim)
         
         category=soup.find(class_='breadcrumb').find_all('a')[-1].text.strip()
         

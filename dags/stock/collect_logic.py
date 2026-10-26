@@ -13,11 +13,10 @@ from ast import literal_eval #避免geometry那欄變成str
 import googlemaps #google api 查詢經緯度
 from stock.config.config import *
 import cv2
-import tensorflow as tf
-from stock.utilities_tf2 import preprocessing, one_hot_decoding
 from lib.log_process_execution import BaseLogRecord
 from lib.db_connection import MySQLConnection as _BaseMySQLConnection
 import boto3
+from io import StringIO
 
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"]="python"
@@ -1130,6 +1129,10 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
         self.broker_dict=broker_dict
         
         print('[券商進出-證交所] 載入驗證碼 CNN 模型…')
+        import tensorflow as tf
+        from stock.utilities_tf2 import preprocessing, one_hot_decoding
+        self._captcha_preprocessing=preprocessing
+        self._captcha_one_hot_decoding=one_hot_decoding
         self.model = tf.keras.models.load_model(self.model_path)
         print('[券商進出-證交所] 驗證碼模型載入完成')
 
@@ -1219,13 +1222,13 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
             shutil.copyfileobj(resp.raw, f)
         
         #破解驗證碼
-        preprocessing(img_path, self.processed_img_path)
+        self._captcha_preprocessing(img_path, self.processed_img_path)
         img = cv2.imread(self.processed_img_path)
         img = img / 255.0  # 归一化
         img = np.expand_dims(img, axis=0)  # 添加批次维度
         
         prediction = self.model.predict(img)
-        predict_captcha = one_hot_decoding(prediction, self.allowedChars)
+        predict_captcha = self._captcha_one_hot_decoding(prediction, self.allowedChars)
 
         payload = {}
         acceptable_input=['__EVENTTARGET','__EVENTARGUMENT','__LASTFOCUS','__VIEWSTATE',
@@ -1370,7 +1373,18 @@ class StockMajorHolderCollectProcess(StockCollectLogic):
     def __init__(self):
         super().__init__()
         all_code_info=pd.read_sql_query('select * from 全證券代碼相關資料表',self.engine)
-        self.all_code=all_code_info.證券代號.tolist()
+        self.all_code=set(
+            all_code_info['證券代號'].dropna().astype(str).str.strip()
+        )
+        self.market_codes_by_market = {
+            market: set(
+                all_code_info.loc[
+                    all_code_info['市場別'].astype(str).str.strip() == market,
+                    '證券代號',
+                ].dropna().astype(str).str.strip()
+            ) - {''}
+            for market in ('上市', '上櫃')
+        }
 
     def rearrange_data(self,df):
         """
@@ -1408,6 +1422,8 @@ class StockMajorHolderCollectProcess(StockCollectLogic):
             return pd.DataFrame(columns=col_name)
         
         total_people=info.人數.iloc[0]
+        if total_people <= 0 or info.股數.iloc[0] <= 0:
+            return pd.DataFrame(columns=col_name)
         total_num=np.round(info.股數.iloc[0]/1000)
         mean_shares=np.round(total_num/total_people,3)
         df=df[df['持股分級']<=15]
@@ -1443,19 +1459,147 @@ class StockMajorHolderCollectProcess(StockCollectLogic):
         return d
 
     def collect(self):
-        #集保中心一次下載全部在整理成神祕金字塔的樣子
-        a=requests.get('https://opendata.tdcc.com.tw/getOD.ashx?id=1-5',headers=self.headers,timeout=30)
-        #csv格式轉成dataframe
-        data_list=list(csv.reader(a.text.splitlines(), delimiter=','))
-        df=pd.DataFrame(data_list[1:],columns=data_list[0])
+        # Fetch the official full-market TDCC OpenAPI batch, not the retired
+        # getOD redirect. Reject redirects and empty/changed payloads so an
+        # empty transformation cannot be reported as a successful collection.
+        response=requests.get(
+            'https://openapi.tdcc.com.tw/v1/opendata/1-5',
+            headers=self.headers,
+            timeout=60,
+            allow_redirects=False,
+        )
+        if 300 <= response.status_code < 400:
+            raise ValueError('TDCC shareholding endpoint returned an unexpected redirect')
+        response.raise_for_status()
+        payload=response.json()
+        response.close()
+        if not isinstance(payload, list) or not payload:
+            raise ValueError('TDCC shareholding endpoint returned no batch rows')
+        df=pd.DataFrame(payload)
+        df.columns=[str(column).lstrip('\ufeff').strip() for column in df.columns]
+        required_columns={
+            '資料日期', '證券代號', '持股分級', '人數', '股數', '占集保庫存數比例%'
+        }
+        missing_columns=required_columns-set(df.columns)
+        if missing_columns:
+            raise ValueError(
+                'TDCC shareholding schema is missing required columns: '
+                + ', '.join(sorted(missing_columns))
+            )
+
+        data_dates=df['資料日期'].astype(str).str.strip()
+        parsed_dates=pd.to_datetime(data_dates, format='%Y%m%d', errors='coerce')
+        if data_dates.empty or parsed_dates.isna().any() or data_dates.nunique() != 1:
+            raise ValueError('TDCC shareholding batch has invalid or mixed effective dates')
+        effective_date=parsed_dates.iloc[0].date()
+        if effective_date > self.now_time.date():
+            raise ValueError('TDCC shareholding batch is dated after the collection date')
+        latest_market_value=pd.read_sql_query(
+            'SELECT MAX(資料日期) AS latest_date FROM 個股成交資訊', self.engine
+        )['latest_date'].iloc[0]
+        latest_market_date=pd.to_datetime(latest_market_value, errors='coerce')
+        if pd.isna(latest_market_date):
+            raise ValueError('cannot verify TDCC freshness without a latest market date')
+        market_date_lag=(latest_market_date.date()-effective_date).days
+        if not 0 <= market_date_lag <= 14:
+            raise ValueError(
+                'TDCC shareholding snapshot is not fresh against the latest market date: '
+                f'effective_date={effective_date.isoformat()}, '
+                f'market_date={latest_market_date.date().isoformat()}, '
+                f'lag_days={market_date_lag}'
+            )
+
+        raw_row_count=len(df)
+        source_codes=df['證券代號'].fillna('').astype(str).str.strip()
+        missing_code_rows=int(source_codes.eq('').sum())
+        if missing_code_rows:
+            raise ValueError(
+                'TDCC shareholding batch quarantined rows with blank security code: '
+                f'quarantined_rows={missing_code_rows}'
+            )
+        df['證券代號']=source_codes
+        normalized_tiers=pd.to_numeric(df['持股分級'], errors='coerce')
+        valid_tier_mask=normalized_tiers.notna()
+        natural_keys=df.loc[valid_tier_mask, ['資料日期', '證券代號']].copy()
+        natural_keys['持股分級']=normalized_tiers.loc[valid_tier_mask]
+        duplicate_mask=natural_keys.duplicated(
+            subset=['資料日期', '證券代號', '持股分級'], keep=False
+        )
+        duplicate_row_count=int(duplicate_mask.sum())
+        duplicate_key_count=int(
+            natural_keys.loc[duplicate_mask].drop_duplicates(
+                subset=['資料日期', '證券代號', '持股分級']
+            ).shape[0]
+        )
+        if duplicate_key_count:
+            raise ValueError(
+                'TDCC shareholding batch has duplicate natural keys: '
+                f'duplicate_keys={duplicate_key_count}, '
+                f'duplicate_rows={duplicate_row_count}'
+            )
         #捨棄其他沒使用的代號(只考慮上市、上櫃)
-        df=df[df.證券代號.isin(self.all_code)].reset_index(drop=True)
-        df['持股分級']=df['持股分級'].astype('int')
-        df['股數']=df['股數'].astype('float')
-        df['人數']=df['人數'].astype('float')
-        #這個column很邪門，"資料日期"這欄位完全看不出來異狀
-        df.columns=['資料日期', '證券代號', '持股分級', '人數', '股數', '占集保庫存數比例%']  
+        df=df[df['證券代號'].isin(self.all_code)].reset_index(drop=True)
+        outside_stock_master_row_count=raw_row_count-len(df)
+        target_row_count=len(df)
+        for column in ('持股分級', '人數', '股數', '占集保庫存數比例%'):
+            df[column]=pd.to_numeric(df[column], errors='coerce')
+        required_values=['持股分級', '人數', '股數', '占集保庫存數比例%']
+        invalid_value_mask=df[required_values].isna().any(axis=1)
+        invalid_value_mask |= (df[['持股分級', '人數', '股數']] < 0).any(axis=1)
+        invalid_value_mask |= (
+            (df['持股分級'] < 1)
+            | (df['持股分級'] > 17)
+            | (df['持股分級'] % 1 != 0)
+            | (df['占集保庫存數比例%'] < 0)
+            | (df['占集保庫存數比例%'] > 100)
+        )
+        quarantined_row_count=int(invalid_value_mask.sum())
+        if df.empty or quarantined_row_count:
+            raise ValueError(
+                'TDCC shareholding batch has no target rows or quarantined '
+                f'invalid target values: target_rows={target_row_count}, '
+                f'quarantined_rows={quarantined_row_count}'
+            )
+        accepted_row_count=target_row_count-quarantined_row_count
+
+        market_codes=set().union(*self.market_codes_by_market.values())
+        observed_codes=set(df['證券代號'])
+        coverage_by_market={}
+        for market, expected_codes in self.market_codes_by_market.items():
+            matched_codes=expected_codes & observed_codes
+            coverage=(len(matched_codes) / len(expected_codes)) if expected_codes else 0
+            coverage_by_market[market]=(len(matched_codes), len(expected_codes), coverage)
+            if expected_codes and coverage < 0.95:
+                raise ValueError(
+                    f'TDCC shareholding coverage is below 95% for {market}: '
+                    f'{len(matched_codes)}/{len(expected_codes)}'
+                )
+
+        market_rows=df[df['證券代號'].isin(market_codes)]
+        total_tier_codes=set(
+            market_rows.loc[market_rows['持股分級'] == 17, '證券代號']
+        )
+        missing_total_codes=set(market_rows['證券代號'])-total_tier_codes
+        if missing_total_codes:
+            raise ValueError(
+                'TDCC shareholding batch is missing total-holding tier 17 for '
+                f'{len(missing_total_codes)} listed/OTC securities'
+            )
+
         final_result=df.groupby(['證券代號']).apply(self.rearrange_data).reset_index(drop=True)
+        if final_result.empty:
+            raise ValueError('TDCC shareholding transform produced no company summaries')
+        transformed_codes=set(final_result['證券代號'].astype(str).str.strip())
+        transformed_coverage_by_market={}
+        for market, expected_codes in self.market_codes_by_market.items():
+            matched_codes=expected_codes & transformed_codes
+            coverage=(len(matched_codes) / len(expected_codes)) if expected_codes else 0
+            transformed_coverage_by_market[market]=(len(matched_codes), len(expected_codes), coverage)
+            if expected_codes and coverage < 0.95:
+                raise ValueError(
+                    f'TDCC transformed coverage is below 95% for {market}: '
+                    f'{len(matched_codes)}/{len(expected_codes)}'
+                )
 
         result=[]
         for code in final_result['證券代號'].unique():
@@ -1463,6 +1607,34 @@ class StockMajorHolderCollectProcess(StockCollectLogic):
             result.append(d)
         
         self.result=result
+        self.effective_date=effective_date.isoformat()
+        self.raw_row_count=raw_row_count
+        self.target_row_count=len(df)
+        self.market_coverage={
+            'raw': coverage_by_market,
+            'transformed': transformed_coverage_by_market,
+        }
+        print(
+            '[stock_major_holder] TDCC batch accepted '
+            f'| effective_date={self.effective_date}'
+            f' | market_date_lag_days={market_date_lag}'
+            f' | raw_rows={raw_row_count}'
+            f' | accepted_rows={accepted_row_count}'
+            f' | quarantined_rows={quarantined_row_count}'
+            f' | duplicate_keys={duplicate_key_count}'
+            f' | duplicate_rows={duplicate_row_count}'
+            f' | outside_stock_master_rows={outside_stock_master_row_count}'
+            f' | target_rows={len(df)}'
+            f' | summary_rows={len(final_result)}'
+            f' | TWSE raw={coverage_by_market.get("上市", (0, 0, 0))[0]}/'
+            f'{coverage_by_market.get("上市", (0, 0, 0))[1]}'
+            f' summary={transformed_coverage_by_market.get("上市", (0, 0, 0))[0]}/'
+            f'{transformed_coverage_by_market.get("上市", (0, 0, 0))[1]}'
+            f' | TPEx raw={coverage_by_market.get("上櫃", (0, 0, 0))[0]}/'
+            f'{coverage_by_market.get("上櫃", (0, 0, 0))[1]}'
+            f' summary={transformed_coverage_by_market.get("上櫃", (0, 0, 0))[0]}/'
+            f'{transformed_coverage_by_market.get("上櫃", (0, 0, 0))[1]}'
+        )
     
     def save(self):
         if len(self.result)>0:
@@ -1668,7 +1840,7 @@ class StockMonthRevenueCollectProcess(StockCollectLogic):
                                   'headers':self.headers,
                                   'method':'post'})
         #pandas 偷懶方式
-        df=pd.read_html(a['text'])[1]
+        df=pd.read_html(StringIO(a['text']),flavor='lxml')[1]
         df.columns=df.iloc[1,:]
         df=df.iloc[2:,:].reset_index(drop=True)
         
@@ -1773,4 +1945,3 @@ class StockMonthRevenueCollectProcess(StockCollectLogic):
             #insert data
             self.result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
             self.insert_count=len(self.result)
-            

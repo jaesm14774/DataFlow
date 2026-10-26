@@ -28,6 +28,7 @@ default_args = {
 
 with DAG(
     dag_id='another_stock_calculate_everyday_process',
+    description='每日收集股票申購與庫藏股歷史資訊，更新相關資料。',
     default_args=default_args,
     schedule='0 22 * * 1,2,3,4,5',
     catchup=False

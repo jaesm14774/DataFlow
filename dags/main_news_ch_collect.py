@@ -25,8 +25,10 @@ default_args = {
 
 with DAG(
     dag_id='news_ch_collect_process',
+    description='定時收集啟用新聞來源的文章網址與內容，更新中文新聞資料表。',
     default_args=default_args,
     schedule='30 0,2,4,6,8,10,15,21 * * *',
+    max_active_runs=1,
     catchup=False
 ) as dag:
     news_ch_collect_article_url = PythonOperator(
@@ -41,6 +43,7 @@ with DAG(
         task_id='collect_news',
         python_callable=collect_news,
         op_kwargs={'engine':engine,'conn':conn,'cursor':cursor,'log_record':log_record},
+        do_xcom_push=True,
         dag=dag,
         on_failure_callback=notify.task_custom_failure_function
     )
@@ -49,6 +52,7 @@ with DAG(
         task_id='delete_and_insert',
         python_callable=delete_and_insert,
         op_kwargs={'engine':engine,'conn':conn,'cursor':cursor,'log_record':log_record},
+        do_xcom_push=True,
         dag=dag,
         on_failure_callback=notify.task_custom_failure_function
     )
@@ -58,4 +62,3 @@ with DAG(
     
 if __name__ == "__main__":
     dag.cli()
-

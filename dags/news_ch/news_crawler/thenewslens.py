@@ -5,6 +5,7 @@ import datetime
 import pandas as pd
 from itertools import chain
 from news_ch.news_crawler.base_process import *
+from news_ch.news_crawler.page_utils import meta, published_time
 
 class TheNewsLens(NewsLogic):
     _source='thenewslens'
@@ -71,6 +72,7 @@ class TheNewsLens(NewsLogic):
         self._headers['Referer']=self._domain_url
         
         a=requests.get(article_url,headers=self._headers,timeout=self._timeout)
+        a.raise_for_status()
         soup=BeautifulSoup(a.text,'lxml')
 
         try:
@@ -109,6 +111,8 @@ class TheNewsLens(NewsLogic):
                 created_at=None
         except Exception:
             created_at=None
+
+        created_at=published_time(meta(soup,'article:published_time')) or created_at
 
         try:
             auth_el=soup.select_one('.author-wrapper a.author, a.author, .author-name, [class*="author-name"]')

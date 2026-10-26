@@ -14,3 +14,5 @@ from news_ch.news_crawler.tvbs import TVBS
 from news_ch.news_crawler.cp import CP
 from news_ch.news_crawler.infotalk import InfoTalk
 from news_ch.news_crawler.tvbs_save_money import TVBS_SaveMoney
+from news_ch.news_crawler.rss_sources import PanSci, Reporter
+from news_ch.news_crawler.einfo import EInfo

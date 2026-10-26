@@ -1,6 +1,5 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator,BranchPythonOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.utils.edgemodifier import Label
 
@@ -32,6 +31,7 @@ default_args = {
 
 with DAG(
     dag_id='stock_collect_everyday_process',
+    description='每日收集上市櫃證券、成交、法人與券商來源資料。',
     default_args=default_args,
     schedule='10 8 * * 1,2,3,4,5',
     catchup=False
@@ -123,18 +123,6 @@ with DAG(
         on_failure_callback=notify.task_custom_failure_function
     )    
 
-    calculate_trigger_process = TriggerDagRunOperator(
-        task_id="calculate_trigger_everyday_dagrun",
-        trigger_dag_id="stock_calculate_everyday_process",
-        execution_date='{{ ts }}',
-        reset_dag_run=True,
-        wait_for_completion=False,
-        allowed_states=['success'],
-        poke_interval =300,
-        on_failure_callback=notify.task_custom_failure_function,
-        on_success_callback=notify.task_custom_success_function
-    )
-    
     stock_deter_open_or_not_process = BranchPythonOperator(
         task_id='stock_deter_open_or_not',
         python_callable=is_taiwan_stock_close,
@@ -164,7 +152,9 @@ with DAG(
     
     stock_broker_inout_twse_collect_process >> stock_broker_inout_twse_collect_second_time_process 
     stock_broker_inout_twse_collect_second_time_process >> sleep_process >> stock_all_code_standard_metric_collect_process
-    stock_all_code_standard_metric_collect_process >> calculate_trigger_process
+    # Do not launch the legacy recommendation DAG from this collector. Its
+    # per-security quote and broker-query inputs are not approved signal feeds;
+    # the scheduled market-signal path is owned by source_extension.
     
 if __name__ == "__main__":
     dag.cli()

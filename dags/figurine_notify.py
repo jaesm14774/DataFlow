@@ -53,15 +53,22 @@ user_agent = [
 ]
 
 #連接mysql
-connection=pd.read_csv(sql_configure_path,index_col='name')
-conn,cursor,engine=get_sql(connection.loc['host','value'],
-                           int(connection.loc['port','value']),
-                           connection.loc['user','value'],
-                           connection.loc['password','value'],database_name)
+conn=cursor=engine=None
 
-
-before_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]
-log_record.set_before_count(before_count)
+def _ensure_runtime(count_before=False):
+    global conn,cursor,engine
+    if conn is None or not getattr(conn,'open',False):
+        connection=pd.read_csv(sql_configure_path,index_col='name')
+        conn,cursor,engine=get_sql(connection.loc['host','value'],
+                                   int(connection.loc['port','value']),
+                                   connection.loc['user','value'],
+                                   connection.loc['password','value'],database_name)
+    if count_before:
+        before_count=pd.read_sql_query(
+            f'select count(1) as N from {table_name}',engine
+        )['N'].iloc[0]
+        log_record.set_before_count(before_count)
+    return conn,cursor,engine
 
 # session=requests.session()
 # session.headers={'user-agent':random.choice(user_agent),
@@ -133,6 +140,7 @@ def search_key(x,key_word=['星之卡比','卡比','耿鬼']):
 
 #truncate insert (overwrite)
 def collect_data(session, shop_id=11664018):
+    _ensure_runtime(count_before=True)
     try:
         if isinstance(shop_id,list):
             data=[]
@@ -168,6 +176,7 @@ def collect_data(session, shop_id=11664018):
         log_record.insert_to_log_record()
 
 def notification(session):
+    _ensure_runtime()
     _key_col=['itemid','image']
     
     D=pd.read_sql_query(f'select * from {table_name}',engine)

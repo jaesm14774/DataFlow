@@ -25,24 +25,17 @@ default_args = {
 
 with DAG(
     dag_id='stock_calculate_everyday_process',
+    description='舊版券商與主力推薦清單；未確認逐股資料授權前不由收集 DAG 觸發。',
     default_args=default_args,
     schedule=None,
     catchup=False
 ) as dag:
-    stock_calculate_outer_and_investment_ratio_process = PythonOperator(
-        task_id='calculate_outer_and_investment_ratio',
-        python_callable=calculate_outer_and_investment_ratio,
-        dag=dag,
-        on_failure_callback=notify.task_custom_failure_function
-    )
-    
-    stock_calculate_outer_and_investment_recommendation_process = PythonOperator(
-        task_id='calculate_outer_and_investment_recommendation',
-        python_callable=calculate_outer_and_investment_recommendation,
-        dag=dag,
-        on_failure_callback=notify.task_custom_failure_function
-    )
-    
+    # This DAG is intentionally manual-only while its per-security broker
+    # query inputs remain outside the approved market-wide signal feeds.
+    # The legacy institutional-flow branches used a website-query feed. Keep
+    # them out of scheduled signals until listed-market batch authorization,
+    # TPEx coverage, PIT history, and outcome checks are established.
+
     stock_calculate_broker_recommendation_process = PythonOperator(
         task_id='calculate_broker_recommendation',
         python_callable=calculate_broker_recommendation,
@@ -56,13 +49,6 @@ with DAG(
         dag=dag,
         on_failure_callback=notify.task_custom_failure_function
     )
-    
-    stock_make_outer_and_investment_recommendation_list_process = PythonOperator(
-        task_id='make_outer_and_investment_recommendation_list',
-        python_callable=make_outer_and_investment_recommendation_list,
-        dag=dag,
-        on_failure_callback=notify.task_custom_failure_function
-    )   
     
     stock_make_broker_inout_recommendation_list_process = PythonOperator(
         task_id='make_broker_inout_recommendation_list',
@@ -85,34 +71,10 @@ with DAG(
         on_failure_callback=notify.task_custom_failure_function
     )   
      
-    stock_make_another_broker_inout_recommendation_list_process = PythonOperator(
-        task_id='make_another_broker_inout_recommendation_list',
-        python_callable=make_another_broker_inout_recommendation_list,
-        dag=dag,
-        on_failure_callback=notify.task_custom_failure_function,
-        on_success_callback=notify.task_custom_success_function
-    ) 
-
-    stock_make_outer_and_investment_cumulate_recommendation_list_process = PythonOperator(
-        task_id='make_outer_and_investment_cumulate_recommendation_list',
-        python_callable=make_outer_and_investment_cumulate_recommendation_list,
-        dag=dag,
-        on_failure_callback=notify.task_custom_failure_function
-    )
-
     
     stock_calculate_mainforce_buy_sell_process >> stock_make_mainforce_buy_sell_recommendation_list_process
     stock_calculate_broker_recommendation_process >> stock_calculate_broker_ten_days_recommendation_process
     
     stock_calculate_broker_ten_days_recommendation_process >> stock_make_broker_inout_recommendation_list_process
-    stock_calculate_broker_ten_days_recommendation_process >> stock_make_another_broker_inout_recommendation_list_process
-    
-    stock_calculate_outer_and_investment_ratio_process >> stock_calculate_outer_and_investment_recommendation_process
-    stock_calculate_outer_and_investment_recommendation_process >> stock_make_outer_and_investment_recommendation_list_process
-    stock_calculate_outer_and_investment_recommendation_process >> stock_make_outer_and_investment_cumulate_recommendation_list_process
-    
-    [stock_make_outer_and_investment_cumulate_recommendation_list_process,stock_make_outer_and_investment_recommendation_list_process]
-
 if __name__ == "__main__":
     dag.cli()
-

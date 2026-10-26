@@ -26,11 +26,7 @@ notify.webhook_url=token
 
 #連接mysql
 database_name='logs'
-connection=pd.read_csv(sql_configure_path,index_col='name')
-conn,cursor,engine=get_sql(connection.loc['host','value'],
-                           int(connection.loc['port','value']),
-                           connection.loc['user','value'],
-                           connection.loc['password','value'],database_name)
+conn=cursor=engine=None
 
 #discord notify for bug
 token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
@@ -42,9 +38,19 @@ def extract_error_type(s):
     return s.split(',')[0].replace('(','').strip()
 
 def notification():
+    global conn,cursor,engine
+    if conn is None or not getattr(conn,'open',False):
+        connection=pd.read_csv(sql_configure_path,index_col='name')
+        conn,cursor,engine=get_sql(connection.loc['host','value'],
+                                   int(connection.loc['port','value']),
+                                   connection.loc['user','value'],
+                                   connection.loc['password','value'],database_name)
     bug=pd.read_sql_query('select * from log where notify=0',engine)
 
     if len(bug) == 0:
+        conn.close()
+        engine.dispose()
+        conn=cursor=engine=None
         return
 
     bug['exc_info']=bug['exc_info'].map(extract_error_type)
@@ -65,6 +71,7 @@ def notification():
     #關閉連線
     conn.close()
     engine.dispose()
+    conn=cursor=engine=None
     print('[Django bug] Discord 通知已送出')
 
 

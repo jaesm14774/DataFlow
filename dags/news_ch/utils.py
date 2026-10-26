@@ -29,7 +29,12 @@ def clean_text(text, special_sign='"'):
 
 def clean_time_format(time_format):
     """Standardize to '%Y-%m-%d %H:%M:%S'; return None for invalid input."""
-    time_format = str(time_format).replace('/', '-')
+    if time_format is None:
+        return None
+
+    time_format = str(time_format).strip().replace('/', '-')
+    if not time_format:
+        return None
     time_format = re.sub(string=time_format, pattern='  ', repl=' ')
 
     if time_format[0] == '0':

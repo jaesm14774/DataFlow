@@ -25,6 +25,7 @@ default_args = {
 
 with DAG(
     dag_id='youtube_collect_process',
+    description='依啟用頻道收集 YouTube 影片、留言與留言回覆資料。',
     default_args=default_args,
     schedule='25 1 * * *',
     catchup=False
@@ -41,4 +42,3 @@ with DAG(
     
 if __name__ == "__main__":
     dag.cli()
-

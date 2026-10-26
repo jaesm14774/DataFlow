@@ -25,8 +25,6 @@ default_args = {
     }
 
 
-connection=pd.read_csv(sql_configure_path,encoding='utf_8_sig',index_col='name')
-
 headers={
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36',
     'referer': 'https://trends.google.com/trends/trendingsearches/daily?geo=TW',
@@ -40,11 +38,7 @@ table_name = 'hot_search'
 log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
                          app_name=app_name)
 
-conn,cursor,engine=get_sql(connection.loc['host','value'],connection.loc['port','value'],
-                            connection.loc['user','value'],connection.loc['password','value'],database_name)
-
-before_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]
-log_record.set_before_count(before_count)
+conn=cursor=engine=None
 
 
 # #get google daily trend all country available
@@ -99,6 +93,13 @@ def search(geo,board_id,date):
     })
 
 def crawler(date=datetime.datetime.now().strftime('%Y%m%d')):
+    global conn,cursor,engine
+    if conn is None or not getattr(conn,'open',False):
+        connection=pd.read_csv(sql_configure_path,encoding='utf_8_sig',index_col='name')
+        conn,cursor,engine=get_sql(connection.loc['host','value'],connection.loc['port','value'],
+                                    connection.loc['user','value'],connection.loc['password','value'],database_name)
+        before_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]
+        log_record.set_before_count(before_count)
     _select_col=['cid','keyword','hot_level','created_at']
     
     print('[GoogleTrend] MySQL 已連線')
@@ -156,6 +157,8 @@ def crawler(date=datetime.datetime.now().strftime('%Y%m%d')):
     finally:
         log_record.insert_to_log_record()
         conn.close() #關閉資料庫
+        engine.dispose()
+        conn=cursor=engine=None
 
 
 with DAG(
@@ -180,4 +183,3 @@ with DAG(
 
 if __name__ == "__main__":
     dag.cli()
-

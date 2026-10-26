@@ -74,6 +74,7 @@ def collect_holiday_taiwan():
 
 with DAG(
     dag_id='taiwan_holiday_collect_process',
+    description='定期收集台灣市場休市日並更新 holiday.taiwan 行事曆。',
     default_args=default_args,
     schedule='0 1 18,1 * *',
     catchup=False

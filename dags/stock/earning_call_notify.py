@@ -1,6 +1,7 @@
 from stock.collect_logic import *
 from lib.notify import DiscordNotify
 from dateutil.relativedelta import relativedelta
+from io import StringIO
 
 class StockEarningCallCollectProcess(StockCollectLogic):
     """
@@ -43,9 +44,29 @@ class StockEarningCallCollectProcess(StockCollectLogic):
                                        'data':data,
                                        'method':'post'})
         soup=BeautifulSoup(a['text'],'lxml')
-        df=pd.read_html(str(soup))[8]
-        df.columns=[s[1] for s in df.columns]
-        df=df.loc[:,['公司代號', '公司名稱', '召開法人說明會日期','中文檔案', '英文檔案']]
+        try:
+            tables=pd.read_html(StringIO(str(soup)),flavor='lxml')
+        except ValueError:
+            return pd.DataFrame(columns=['證券代號','證券名稱','資料日期','file_url'])
+
+        expected_columns={'公司代號','公司名稱','召開法人說明會日期','中文檔案','英文檔案'}
+        df=None
+        for table in reversed(tables):
+            columns=[s[1] if isinstance(s,tuple) and len(s)>1 else s
+                     for s in table.columns]
+            if expected_columns.issubset(columns):
+                table.columns=columns
+                df=table
+                break
+
+        if df is None:
+            return pd.DataFrame(columns=['證券代號','證券名稱','資料日期','file_url'])
+
+        df=df.loc[:,['公司代號','公司名稱','召開法人說明會日期','中文檔案','英文檔案']]
+        df=df[df['公司代號'].notna()].copy()
+        if df.empty:
+            return pd.DataFrame(columns=['證券代號','證券名稱','資料日期','file_url'])
+
         df=df.rename(columns={
             '公司代號':'證券代號',
             '公司名稱':'證券名稱',

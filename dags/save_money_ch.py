@@ -24,6 +24,7 @@ default_args = {
 
 with DAG(
     dag_id='save_money_ch_collect_process',
+    description='定時收集中文優惠資訊，更新資料並通知新內容。',
     default_args=default_args,
     schedule='40 1,4,10 * * *',
     catchup=False
@@ -57,4 +58,3 @@ with DAG(
     
 if __name__ == "__main__":
     dag.cli()
-

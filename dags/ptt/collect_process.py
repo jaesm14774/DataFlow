@@ -5,6 +5,8 @@ from bs4 import BeautifulSoup
 import numpy as np
 import pandas as pd
 import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from lib.common_tool import task_wrapper
 from lib.get_sql import get_sql
 from lib.log_process_execution import BaseLogRecord
@@ -18,16 +20,22 @@ table_name = 'ptt_article'
 log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
                          app_name=app_name)
 
-#連接mysql
-connection=pd.read_csv(sql_configure_path,index_col='name')
-conn,cursor,engine=get_sql(connection.loc['host','value'],
-                           int(connection.loc['port','value']),
-                           connection.loc['user','value'],
-                           connection.loc['password','value'], database_name)
+conn=cursor=engine=None
 
-before_count=pd.read_sql_query(f'select count(id) as N from {table_name}',engine)['N'].iloc[0]
-log_record.set_before_count(before_count)
-print(f'[PTT] DB 既有文章筆數={before_count}')
+def _ensure_runtime():
+    global conn,cursor,engine
+    if conn is None or not getattr(conn,'open',False):
+        connection=pd.read_csv(sql_configure_path,index_col='name')
+        conn,cursor,engine=get_sql(connection.loc['host','value'],
+                                   int(connection.loc['port','value']),
+                                   connection.loc['user','value'],
+                                   connection.loc['password','value'], database_name)
+        before_count=pd.read_sql_query(
+            f'select count(id) as N from {table_name}',engine
+        )['N'].iloc[0]
+        log_record.set_before_count(before_count)
+        print(f'[PTT] DB 既有文章筆數={before_count}')
+    return conn,cursor,engine
 
 class PttScraper:
     board_id=''
@@ -40,12 +48,28 @@ class PttScraper:
             'cookie': 'over18=1'
         }
 
+        retry = Retry(
+            total=3,
+            connect=3,
+            read=3,
+            status=3,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({'GET'}),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.session = requests.Session()
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
+
         self.board=pd.read_sql_query('select id, board_id, crawler_page from ptt_board where status=1',engine)
         self.delete_count = 0
         self.insert_count = 0
 
     def fetch_hot_boards(self):
-        response = requests.get(f'{self.base_url}/hotboards.html', headers=self.headers, timeout=20)
+        response = self.session.get(f'{self.base_url}/hotboards.html', headers=self.headers, timeout=20)
+        response.raise_for_status()
         soup = BeautifulSoup(response.text, 'lxml')
 
         board_df_list = []
@@ -74,7 +98,8 @@ class PttScraper:
         return pd.concat(board_df_list).reset_index(drop=True)
 
     def fetch_article_urls(self, max_page=1):
-        response = requests.get(f'{self.base_url}/bbs/{self.board_id}/index.html', headers=self.headers, timeout=20)
+        response = self.session.get(f'{self.base_url}/bbs/{self.board_id}/index.html', headers=self.headers, timeout=20)
+        response.raise_for_status()
         soup = BeautifulSoup(response.text, 'lxml')
 
         for s in soup.find_all(class_='item'):
@@ -93,7 +118,8 @@ class PttScraper:
                      soup.find(class_='r-list-container').find_all('a')])
 
             else:
-                response = requests.get(f'{self.base_url}/bbs/{self.board_id}/index{ii}.html', headers=self.headers, timeout=20)
+                response = self.session.get(f'{self.base_url}/bbs/{self.board_id}/index{ii}.html', headers=self.headers, timeout=20)
+                response.raise_for_status()
 
                 soup = BeautifulSoup(response.text, 'lxml')
 
@@ -109,10 +135,12 @@ class PttScraper:
     def parse_article(self, article_url):
         article_id = re.search(string=article_url, pattern=r'/([A-z0-9\.]+)\.html$').group(1)
 
-        a = requests.get(article_url, headers=self.headers, timeout=20)
+        a = self.session.get(article_url, headers=self.headers, timeout=20)
 
         if a.status_code == 404:
             return pd.DataFrame(), pd.DataFrame()
+
+        a.raise_for_status()
 
         soup = BeautifulSoup(a.text, 'lxml')
 
@@ -454,5 +482,6 @@ class PttScraper:
 
 @task_wrapper
 def collect_all_ptt():
+    _ensure_runtime()
     process=PttScraper()
     process.etl_process()

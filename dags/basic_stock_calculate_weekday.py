@@ -25,6 +25,7 @@ default_args = {
 
 with DAG(
     dag_id='stock_calculate_weekday_process',
+    description='彙整大戶持股、融資融券與月營收資料，更新週期性股票推薦清單。',
     default_args=default_args,
     schedule=None,
     catchup=False
@@ -55,4 +56,3 @@ with DAG(
     
 if __name__ == "__main__":
     dag.cli()
-

@@ -25,6 +25,7 @@ default_args = {
 
 with DAG(
     dag_id='ptt_collect_process',
+    description='依 ptt_board 啟用設定收集 PTT 看板文章與留言並更新資料庫。',
     default_args=default_args,
     schedule='5 0,2,4,6,10,16 * * *',
     catchup=False
@@ -41,4 +42,3 @@ with DAG(
     
 if __name__ == "__main__":
     dag.cli()
-

@@ -33,6 +33,7 @@ default_args = {
 
 with DAG(
     dag_id='stock_collect_weekday_process',
+    description='每週收集大戶比例、融資融券、月營收與法說會資料，完成後觸發計算流程。',
     default_args=default_args,
     schedule='0 1 * * 6',
     catchup=False
@@ -94,4 +95,3 @@ with DAG(
     
 if __name__ == "__main__":
     dag.cli()
-

@@ -27,20 +27,31 @@ token = token.loc['新聞即時通', 'token']
 news_ch_notify = DiscordNotify()
 news_ch_notify.webhook_url = token
 
-connection = pd.read_csv(sql_configure_path, index_col='name')
-host = connection.loc[('host', 'value')]
-port = int(connection.loc[('port', 'value')])
-user = connection.loc[('user', 'value')]
-password = connection.loc[('password', 'value')]
-conn, cursor, engine = get_sql(host, port, user, password, 'news_ch')
+NOTIFICATION_LOOKUP_INDEX = 'ix_news_notification_source_article'
 
-all_code = pd.read_sql_query('select * from stock.全證券代碼相關資料表', engine)
-all_code['證券代號'] = [s.strip() for s in all_code.證券代號]
-all_code['證券名稱'] = [s.strip() for s in all_code.證券名稱]
+def _ensure_notification_lookup_index(cursor):
+    cursor.execute(
+        'SHOW INDEX FROM notification_record WHERE Key_name=%s',
+        (NOTIFICATION_LOOKUP_INDEX,),
+    )
+    if cursor.fetchone() is None:
+        cursor.execute(
+            'ALTER TABLE notification_record '
+            f'ADD INDEX {NOTIFICATION_LOOKUP_INDEX} (source, article_id), '
+            'ALGORITHM=INPLACE, LOCK=NONE'
+        )
 
-self_own = pd.read_sql_query('select * from stock.持股清單 where notify_status = 1', engine)
-self_own = all_code.iloc[[i for i, j in enumerate(all_code.證券代號) if j in self_own['持股清單'].values], 0:2]
-assert not self_own.shape[0] == 0, 'Done'
+def _load_enabled_holding_names(engine):
+    all_code = pd.read_sql_query(
+        'SELECT 證券代號, 證券名稱 FROM stock.全證券代碼相關資料表', engine
+    )
+    holdings = pd.read_sql_query(
+        'SELECT 持股清單 FROM stock.持股清單 WHERE notify_status=1', engine
+    )
+    enabled_codes = set(holdings['持股清單'].dropna().astype(str).str.strip())
+    all_code['證券代號'] = all_code['證券代號'].fillna('').astype(str).str.strip()
+    all_code['證券名稱'] = all_code['證券名稱'].fillna('').astype(str).str.strip()
+    return all_code.loc[all_code['證券代號'].isin(enabled_codes), '證券名稱'].tolist()
 
 def split_content_into_chunks(content, chunk_size=500):
     """
@@ -80,17 +91,23 @@ def count_keywords_presence(content, keywords):
 def keyword_exist_in_text(content, keywords):
     return all(keyword in content for keyword in keywords)
 
-def news_notify(codes, restricted_conditions=[], keyword_requirements=None, required_keyword_count=2, must_exist_keyword_list=[]):
+def _news_notify_with_engine(codes, restricted_conditions, keyword_requirements,
+                             required_keyword_count, must_exist_keyword_list, engine):
     """
     根據股票號碼或希望追蹤的關鍵字以及新聞的類別，決定是否使用discord Notify通知。
     只要文章中出現指定的關鍵字中的任意一定數量時即進行通知。
     """
     select_sql_query = """
-        SELECT * FROM news tb
-        WHERE NOT EXISTS (
-            SELECT * FROM notification_record tb2
-            WHERE tb.source = tb2.source AND tb.article_id = tb2.article_id
-        )
+        SELECT full.*
+        FROM (
+            SELECT tb.id
+            FROM news tb
+            LEFT JOIN notification_record notified
+                   ON notified.source = tb.source
+                  AND notified.article_id = tb.article_id
+            WHERE notified.id IS NULL
+        ) unseen
+        INNER JOIN news full ON full.id = unseen.id
     """
     original_df = pd.read_sql_query(select_sql_query, engine).reset_index(drop=True)
     print(f"這次的中文新聞候選共有 {original_df.shape[0]}篇")
@@ -132,8 +149,35 @@ def news_notify(codes, restricted_conditions=[], keyword_requirements=None, requ
     original_df.loc[:, ['article_id', 'source']].to_sql('notification_record', engine, index=False, if_exists='append')
     print('通知完成')
 
+def news_notify(codes=None, restricted_conditions=None, keyword_requirements=None,
+                required_keyword_count=2, must_exist_keyword_list=None):
+    connection = pd.read_csv(sql_configure_path, index_col='name')
+    conn, cursor, engine = get_sql(
+        connection.loc['host', 'value'], int(connection.loc['port', 'value']),
+        connection.loc['user', 'value'], connection.loc['password', 'value'],
+        'news_ch',
+    )
+    try:
+        _ensure_notification_lookup_index(cursor)
+        if codes is None:
+            codes = _load_enabled_holding_names(engine)
+        if not codes:
+            raise AssertionError('Done')
+        return _news_notify_with_engine(
+            codes=codes,
+            restricted_conditions=restricted_conditions or [],
+            keyword_requirements=keyword_requirements,
+            required_keyword_count=required_keyword_count,
+            must_exist_keyword_list=must_exist_keyword_list or [],
+            engine=engine,
+        )
+    finally:
+        conn.close()
+        engine.dispose()
+
 with DAG(
     dag_id='news_ch_notify',
+    description='篩選尚未處理的新聞通知，依持股公司與關鍵字規則投遞並記錄結果。',
     default_args=default_args,
     schedule='30 1,4,6,10,14,22 * * *',
     catchup=False
@@ -143,7 +187,7 @@ with DAG(
         python_callable=news_notify,
         dag=dag,
         op_kwargs={
-            'codes':self_own['證券名稱'].values.tolist(),
+            'codes':None,
             'restricted_conditions':[
                 {'source':'iThome','category':[]},
                 {'source':'thenewslens','category':['科技', '財經']}

@@ -1,6 +1,6 @@
 from stock.collect_logic import *
 from lib.common_tool import task_wrapper
-from lib.get_sql import get_sql
+from lib.taiwan_market_calendar import is_taiwan_stock_market_closed
 
 START=1
 
@@ -86,19 +86,16 @@ def broker_inout_twse_collect():
     
     print('[stock DAG] 證交所券商進出收集結束')
 
-#判斷是否台灣有開盤(所有假日、補班皆不會開盤)
+#依共用台灣股市日曆判斷是否開盤
 def is_taiwan_stock_close(task_name='stock_all_code_info_collect'):
-    connection=pd.read_csv(sql_configure_path,encoding='utf_8_sig',index_col='name')
-    conn,cursor,engine=get_sql(connection.loc['host','value'],connection.loc['port','value'],
-                               connection.loc['user','value'],connection.loc['password','value'],'holiday')
-    
-    today=(BACKFILL_DATE
-           if BACKFILL_DATE
-           else (datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'))
-    exist_ornot=pd.read_sql_query(f"select * from holiday.taiwan where now_date='{today}'",engine)
-    is_holiday = len(exist_ornot) > 0 and not today.endswith('09-03')
+    today=(
+        datetime.datetime.strptime(BACKFILL_DATE, '%Y-%m-%d').date()
+        if BACKFILL_DATE
+        else (datetime.datetime.now()+datetime.timedelta(hours=8)).date()
+    )
+    is_holiday = is_taiwan_stock_market_closed(today)
     next_task = 'stock_collect_process_is_done' if is_holiday else task_name
-    print(f'[開盤判斷] 日期={today} | 假日表命中={len(exist_ornot)} 列 | 視為休市={is_holiday} | 下一節點={next_task}')
+    print(f'[開盤判斷] 下一節點={next_task}')
     if is_holiday:
         return 'stock_collect_process_is_done'
     return task_name

@@ -6,6 +6,7 @@ import pandas as pd
 from itertools import chain
 import time
 from news_ch.news_crawler.base_process import *
+from news_ch.news_crawler.page_utils import article_metadata, jsonld_nodes, published_time, meta
 
 class Anue(NewsLogic):
     _source='鉅亨網'
@@ -46,7 +47,14 @@ class Anue(NewsLogic):
                 continue
             
             url.append(['https://news.cnyes.com/news/id/%s?exp=a' % ss for ss in dat.newsId])
-            Time.append([format(datetime.datetime.fromtimestamp(t),'%Y-%m-%d %H:%M:%S') for t in dat.publishAt])
+            Time.append([
+                datetime.datetime.fromtimestamp(
+                    t, datetime.timezone.utc
+                ).astimezone(
+                    datetime.timezone(datetime.timedelta(hours=8))
+                ).strftime('%Y-%m-%d %H:%M:%S')
+                for t in dat.publishAt
+            ])
             img.append(dat.coverSrc.map(self.extract_img).tolist())
             time.sleep(3)
 
@@ -66,29 +74,36 @@ class Anue(NewsLogic):
     
     def get_article_info(self,article_url,tim,img,keyword,category):
         a=requests.get(article_url,headers=self._headers,timeout=self._timeout)
+        a.raise_for_status()
         soup=BeautifulSoup(a.text,'lxml')
+
+        metadata=article_metadata(soup,article_url)
+        if not metadata:
+            raise ValueError('Anue article has no matching NewsArticle metadata')
         
         try:
-            title=soup.find('h1').text
+            title=metadata['headline']
             title=re.sub(string=title,pattern=r'\u3000|\xa0|^\s+|\s+$',repl='')
         except Exception:
             print(f'[中文新聞] 缺少 title（頁面改版或選擇器失效）| url={article_url}')
             title=' '
         
-        created_at=tim
+        created_at=published_time(metadata.get('datePublished'))
         
         try:
-            author=soup.find(class_='alr4vq1').text
+            raw_author=metadata.get('author',[])
+            raw_author=raw_author if isinstance(raw_author,list) else [raw_author]
+            author=';'.join(item.get('name','') if isinstance(item,dict) else str(item) for item in raw_author)
             author=re.sub(string=author,pattern='鉅亨網|記者',repl='').strip()
         except Exception:
             print(f'[中文新聞] 缺少 author | url={article_url}')
             author=' '
         
         try:
-            content=''
-            temp=soup.find('main', {'id': 'article-container'}).find_all('p')
-            for s in temp:
-                content=content+s.text+'\n'
+            content=metadata.get('articleBody') or ''
+            if not content:
+                temp=soup.find('main', {'id': 'article-container'}).find_all('p')
+                content='\n'.join(s.get_text(' ',strip=True) for s in temp)
             content=re.sub(pattern=r'\n+$|^\n+',repl='',string=content)
         except Exception:
             print(f'[中文新聞] 缺少 content | url={article_url}')
@@ -96,8 +111,7 @@ class Anue(NewsLogic):
         
         #keyword
         try:
-            keyword=[s.text for s in soup.find_all(class_='t1v4wtvw')]
-            keyword=';'.join(keyword)
+            keyword=str(metadata.get('keywords') or '').replace(',',';')
         except Exception:
             keyword=' '
             print(f'[中文新聞] 缺少 keyword | url={article_url}')
@@ -105,7 +119,9 @@ class Anue(NewsLogic):
         article_id=re.search(string=article_url,pattern=r'id/(\d+)').group(1)
 
         try:
-            category=soup.find('title').text.split('|')[1].split('-')[1].strip()
+            breadcrumbs=next((n for n in jsonld_nodes(soup) if n.get('@type')=='BreadcrumbList'),{})
+            category=';'.join(item.get('name','') for item in breadcrumbs.get('itemListElement',[]) if not item.get('item') or not str(item.get('item')).split('?')[0].rstrip('/').endswith('/id/'+article_id))
+            category=category or metadata.get('articleSection','')
         except Exception:
             category=''
             print(f'[中文新聞] 缺少 category | url={article_url}')

@@ -4,6 +4,7 @@ import re
 import datetime
 import pandas as pd
 from news_ch.news_crawler.base_process import *
+from news_ch.news_crawler.page_utils import published_time, scoped_text
 
 class LibertyTimes(NewsLogic):
     _source='自由時報'
@@ -42,6 +43,7 @@ class LibertyTimes(NewsLogic):
 
     def get_article_info(self,article_url,tim,img,keyword,category):
         b=requests.get(article_url,headers=self._headers,timeout=self._timeout)
+        b.raise_for_status()
         soup=BeautifulSoup(b.text,'lxml')
         
         try:
@@ -57,13 +59,13 @@ class LibertyTimes(NewsLogic):
             if meta_time and meta_time.get('content'):
                 raw=meta_time['content']
                 dt=datetime.datetime.fromisoformat(raw.replace('Z','+00:00'))
-                created_at=dt.strftime('%Y-%m-%d %H:%M:%S')
+                created_at=published_time(raw)
             else:
                 meta_pub=soup.find('meta',{'name':'pubdate'})
                 if meta_pub and meta_pub.get('content'):
                     raw=meta_pub['content']
                     dt=datetime.datetime.fromisoformat(raw.replace('Z','+00:00'))
-                    created_at=dt.strftime('%Y-%m-%d %H:%M:%S')
+                    created_at=published_time(raw)
                 else:
                     time_els=[s.text.strip() for s in soup.find_all(class_=re.compile('time|article_time'))]
                     time_els=[s for s in time_els if s]
@@ -120,15 +122,23 @@ class LibertyTimes(NewsLogic):
             if not text_node:
                 text_node=soup.select_one('div.whitecon.article div.text')
             if not text_node:
-                text_node=soup.select_one('div.whitecon:not(.template) div.text')
+                # Empty hidden template wrappers precede the real vertical body.
+                candidates=soup.select('article.article > div.text, div.whitecon:not(.template) > div.text')
+                text_node=next((node for node in candidates if node.get_text(strip=True)),None)
+            if not text_node:
+                # Entertainment, sports and auto verticals use article > .text.
+                text_node=soup.select_one('article.article > div.text')
 
+            if text_node and not text_node.get_text(strip=True):
+                candidates=soup.select('article.article > div.text, div.whitecon:not(.template) > div.text')
+                text_node=next((node for node in candidates if node.get_text(strip=True)),None)
             if text_node:
                 temp=text_node.find_all('p',recursive=False)
                 if not temp:
                     temp=text_node.find_all('p')
                 temp=[s.text for s in temp if not bool(re.search(string=str(s),pattern=r'before_ir|after_ir|appE1121'))]
                 temp=[s for s in temp if s.strip()]
-                content='\n'.join(temp).strip()
+                content=scoped_text(text_node)
             if not content:
                 content=' '
         except Exception:

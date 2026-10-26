@@ -5,23 +5,51 @@ import datetime
 import pandas as pd
 import random
 from news_ch.news_crawler.base_process import *
+from news_ch.news_crawler.page_utils import meta
 
 class ETtoday(NewsLogic):
     _source='ETtoday'
     _domain_url=f'https://www.ettoday.net'
     _timeout=30
+    _page=10
     _now_date=format(datetime.datetime.now(),'%Y-%m-%d')
 
     def change_time_format(self,txt):
         return re.sub(string=txt,pattern='/',repl='-')
+
+    @staticmethod
+    def _logo_category(text,fallback=''):
+        labels=list(dict.fromkeys(
+            ' '.join(line.split()) for line in str(text).splitlines()
+            if line.strip() and line.strip().casefold() not in {'ettoday','go'}
+        ))
+        return labels[0] if len(labels)==1 and len(labels[0])<=80 else str(fallback or '').strip()
+
+    @classmethod
+    def _article_category(cls,soup,fallback=''):
+        section=meta(soup,'article:section')
+        if section:
+            return section
+        menu=soup.select_one('div.part_menu_5')
+        selected=menu.select_one('.btn.current,strong') if menu else None
+        if selected and selected.get_text(' ',strip=True):
+            return selected.get_text(' ',strip=True)
+        logo=soup.find(class_=re.compile('^logo_|_logo$'))
+        return cls._logo_category(logo.get_text('\n',strip=True),fallback) if logo else str(fallback or '').strip()
     
     def get_article_url_from(self):
+        # Compute the publisher date at call time (workers can live across midnight).
+        self._now_date=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d')
         a=requests.get(f'{self._domain_url}/news/news-list-{self._now_date}-0.htm',headers=self._headers,
                        timeout=self._timeout)
+        a.raise_for_status()
         soup=BeautifulSoup(a.text,'lxml')
         
         TEMP=[]
-        for part in soup.find(class_='part_list_2').find_all('h3'):
+        listing=soup.find(class_='part_list_2')
+        if listing is None:
+            raise ValueError('ETtoday page has no recognized news list')
+        for part in listing.find_all('h3'):
             title=part.find('a').text.strip()
             
             created_at=part.find(class_='date').text.strip()
@@ -47,8 +75,8 @@ class ETtoday(NewsLogic):
         
         temp_date=re.sub(string=self._now_date,pattern='-',repl='')
         #抓到昨天的數據則停止
-        sign=0;index=1
-        while sign != 1:
+        seen_urls={frame['article_url'].iloc[0] for frame in TEMP}
+        for index in range(1,self._page+1):
             b=requests.post(f'{self._domain_url}/show_roll.php',headers={
                 'user-agent':str(np.random.choice(user_agent)),
                 'referer':f'{self._domain_url}/news/news-list-{self._now_date}-0.htm'},data={
@@ -58,15 +86,21 @@ class ETtoday(NewsLogic):
                 'tOt': 0,
                 'tSi': 100,
                 'tAr': 0,
-            })
+            },timeout=self._timeout)
+            b.raise_for_status()
             soup_t=BeautifulSoup(b.text,'lxml')
+
+            entries=soup_t.find_all('h3')
+            if not entries:
+                break
             
             compare_date=datetime.datetime.strptime(soup_t.find('h3').find(class_='date').text,'%Y/%m/%d %H:%M')
             now_date=datetime.datetime.strptime(self._now_date,'%Y-%m-%d')
             if compare_date < now_date:
-                sign=1
+                break
             else:
-                for part in soup_t.find_all('h3'):
+                new_count=0
+                for part in entries:
                     title=part.find('a').text.strip()
                     
                     created_at=part.find(class_='date').text.strip()
@@ -80,6 +114,11 @@ class ETtoday(NewsLogic):
                     article_url=part.find('a').get('href')
                     if not bool(re.search(string=article_url,pattern=r'^https*')):
                         article_url=f'{self._domain_url}'+article_url
+
+                    if article_url in seen_urls:
+                        continue
+                    seen_urls.add(article_url)
+                    new_count+=1
                     
                     TEMP.append(pd.DataFrame({
                         'created_at':created_at,
@@ -90,7 +129,8 @@ class ETtoday(NewsLogic):
                         'img':' ',
                     },index=[1]))
                 
-                index=index+1
+                if not new_count:
+                    break
         
         TEMP=pd.concat(TEMP)
         TEMP=TEMP[~TEMP.duplicated(subset=['article_url'])]
@@ -102,6 +142,7 @@ class ETtoday(NewsLogic):
         self._headers['Referer']=self._domain_url
         
         a=requests.get(article_url,headers=self._headers,timeout=self._timeout)
+        a.raise_for_status()
         soup=BeautifulSoup(a.text,'lxml')
         
         #title
@@ -130,16 +171,7 @@ class ETtoday(NewsLogic):
         except Exception:
             keyword=' '
         
-        if soup.find('div',class_='part_menu_5 clearfix') is not None:
-            try:
-                category=soup.find('div',class_='part_menu_5 clearfix').find(class_='btn current').text.strip()
-            except Exception:
-                category=soup.find('div',class_='part_menu_5 clearfix').find('strong').text.strip()
-        elif soup.find(class_=re.compile('^logo_|_logo$')) is not None:
-            category=soup.find(class_=re.compile('^logo_|_logo$')).text.strip()
-        else:
-            category=' '
-            print(f'[中文新聞] 分類解析失敗 | url={article_url}')
+        category=self._article_category(soup,category)
         
         try:
             img=soup.find(class_='story').find('img').get('src')

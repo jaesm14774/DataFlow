@@ -11,6 +11,7 @@ DataFlow is designed to streamline the collection and processing of financial da
 - Notification delivery through Discord and Line
 - Google Trends data collection
 - Google Play game pre-registration and new releases collection (支援 Google Play、QooApp 多來源，自動去重)
+- Approved official-source ingestion, market-signal analysis, and holdings-based notifications
 
 ## Technical Highlights
 
@@ -48,6 +49,7 @@ DataFlow is designed to streamline the collection and processing of financial da
 │   │   ├── utils.py        # Pure helpers (URL validation, text/time cleanup)
 │   │   └── news_crawler/   # 一站一檔（anue.py, ettoday.py, ...），__init__.py 統一匯出
 │   ├── ptt/                # PTT (Taiwanese forum) collection
+│   ├── source_extension/   # Approved source registry, normalized records, and market signals
 │   ├── stock/              # Stock data collection and analysis
 │   │   └── error/          # Error handling for stock collection
 │   └── youtube/            # YouTube data collection
@@ -127,75 +129,9 @@ BACKFILL_DATE = '2026-03-16'
 - 依賴 `really_date`（從 DB 查最新三大法人日期）的任務，會在三大法人資料寫入後自動取得正確日期
 - 回補完畢務必改回 `BACKFILL_DATE = None`
 
-## Recent Fixes
+## News crawler layout
 
-### 2026-03-23: news_ch 模組重構
-
-**架構改善：**
-- `news_crawler/module.py`（1611 行）拆成一個爬蟲一個檔案（16 檔），由 `__init__.py` 統一匯出；`all_news.py` / `save_money.py` 改為 explicit import
-
-**Bug 修復：**
-- `base_process.py` — `_headers` 原為 class attribute（共用 mutable dict），任一爬蟲修改 `Referer` 會影響其他爬蟲；改為 `__init__` 內建立 instance attribute，每個實例獨立
-- `base_process.py` — `_now_time` 原在 class 定義時就固定，改為實例建立時計算，`create_time` 更準確
-
-**清理：**
-- `save_money.py` — 移除 3 處不必要的 `global table_name`（函式內只讀取模組變數，無需 global）
-
-### 2026-03-21: DAG 日誌優化與月營收重試修正
-
-- **日誌：** 調整 `dags/` 內多數 `print` 為簡短中文說明並帶前綴；錯誤時輸出例外類型與訊息。
-- **Bug：** `StockMonthRevenueCollectProcess.collect` 在錯誤重試迴圈中誤呼叫 `get_margin_data`（融資券），已改為 `get_month_revenue`，否則重試無法補齊月營收。
-
-### 2025-02-20: 修復事前登錄遊戲重複通知
-
-修復 `game/pre_registration.py` 中 `pre_registration_tmp` 未在無新遊戲時清空，導致每次 DAG 執行都重複發送相同遊戲通知。
-
-**問題：** `write_to_sql` 僅在 `new_df` 非空時才更新 `pre_registration_tmp`，無新遊戲時 tmp 保留上次資料，`notify_new_games` 每次讀取 tmp 都會重複通知。
-
-**修復方式：** 將 `pre_registration_tmp` 的更新移出 `if not new_df.empty` 區塊，無論有無新遊戲都執行 `replace`，無新遊戲時以空表覆蓋 tmp。
-
-**影響範圍：** `game/pre_registration.py` (write_to_sql)
-
-### 2025-02-18: 修復 Google Play 事前登錄遊戲抓取不全
-
-修復 `game/pre_registration.py` 中 Google Play 事前登錄遊戲抓取不全問題。
-
-**問題：**
-- `parse_search_results` 僅比對 `title in ['Pre-registration games', 'Google Play']`，搜尋結果標題可能不符
-- 部分遊戲圖片僅有 `src` 無 `srcset`，被過濾掉
-- 未處理 lazy loading，捲動後才載入的遊戲抓不到
-
-**修復方式：**
-- 新增固定 URL `GOOGLE_PLAY_PRE_REG_URL` 作為 fallback
-- `parse_search_results` 改為比對 URL 含 `promotion_3000000d51_pre_registration_games`，無匹配則用固定 URL
-- `fetch_google_play_pre_registration`：img 改為 `srcset or src`、移除 img 必填、加入捲動載入 lazy content、game_id 正確處理 `&` 後參數
-
-**影響範圍：**
-- `game/pre_registration.py` (Google Play 事前登錄收集)
-
-### 2025-12-23: 修復 save_money TVBS_SaveMoney IndexError
-
-修復 `news_ch/news_crawler/module.py` 中 `TVBS_SaveMoney.get_article_url_from()` 方法的 `IndexError`。當網頁找不到包含 `itemListElement` 的 JSON-LD script 標籤時，列表推導式返回空列表，訪問 `[0]` 會導致錯誤。
-
-**修復方式：**
-- 先將列表推導式結果存儲到變數
-- 檢查列表是否為空，為空則返回空的 DataFrame 並記錄錯誤訊息
-- 檢查 `article_id_list` 是否為空，避免 SQL 查詢錯誤
-
-**影響範圍：**
-- `TVBS_SaveMoney.get_article_url_from()` (TVBS 優惠好康情報)
-
-### 2025-12-25: 修復新聞收集 UTF-8 BOM 錯誤
-
-修復 `news_ch/news_crawler/module.py` 中 JSON 解析錯誤。當 API 回傳的內容包含 UTF-8 BOM (Byte Order Mark) 時，直接使用 `.json()` 會導致 `JSONDecodeError`。
-
-**修復方式：**
-在所有 API 請求後，解析 JSON 前設定 `response.encoding='utf-8-sig'`，自動處理 BOM。
-
-**影響範圍：**
-- `LibertyTimes.get_article_url_from()` (自由時報)
-- `Anue.get_article_url_from()` (鉅亨網)
-- `UDN.get_article_url_from()` (聯合新聞網)
+Each Chinese-news source has its own module under `dags/news_ch/news_crawler/`; `__init__.py` exports the supported crawlers used by the collection DAGs.
 
 ## Database Maintenance
 

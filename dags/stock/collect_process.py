@@ -1,6 +1,7 @@
 from stock.collect_logic import *
 from lib.common_tool import task_wrapper
 from lib.taiwan_market_calendar import is_taiwan_stock_market_closed
+from stock import margin_daily
 
 START=1
 
@@ -127,6 +128,47 @@ def margin_trade_collect():
         main_etl.process()
     
     print('[stock DAG] 融資融券收集結束')
+
+#每日融資融券: 目標交易日 = DAG 觸發當天（台北時間）
+def margin_daily_target_date(logical_date=None):
+    if BACKFILL_DATE:
+        return datetime.datetime.strptime(BACKFILL_DATE, '%Y-%m-%d').date()
+    if logical_date is not None:
+        return logical_date.in_timezone('Asia/Taipei').date()
+    return (datetime.datetime.now()+datetime.timedelta(hours=8)).date()
+
+#休市日不收集（回傳 False 讓 ShortCircuit 略過後續節點）
+def margin_daily_is_trading_day(logical_date=None):
+    target=margin_daily_target_date(logical_date)
+    closed=is_taiwan_stock_market_closed(target)
+    print(f'[融資融券每日] 目標交易日={target} | 休市={closed}')
+    return not closed
+
+#來源是否已公布目標交易日（探測一檔流動股的頁面，一次請求；未公布就晚點再探測，不空跑整輪爬蟲）
+def margin_daily_source_ready(logical_date=None):
+    target=margin_daily_target_date(logical_date)
+    main_etl=None
+    try:
+        main_etl=StockMarginTradeDailyProcess(target)
+        latest=main_etl.source_latest_date()
+        ready=margin_daily.source_has_target(latest,target)
+        print(f'[融資融券每日] 探測 | 目標交易日={target} | 來源最新={latest} | 已公布={ready}')
+        return ready
+    except Exception as exc:
+        print(f'[融資融券每日] 探測失敗，稍後重試 | {type(exc).__name__}: {exc}')
+        return False
+    finally:
+        if main_etl is not None:
+            main_etl.end()
+
+#每日收集融資融券
+@task_wrapper
+def margin_trade_daily_collect(logical_date=None):
+    if START:
+        main_etl=StockMarginTradeDailyProcess(margin_daily_target_date(logical_date))
+        main_etl.process()
+
+    print('[stock DAG] 每日融資融券收集結束')
 
 #收集月營收資訊
 @task_wrapper

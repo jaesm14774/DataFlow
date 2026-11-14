@@ -52,7 +52,7 @@ TPEX_OPENAPI_RANGE_SOURCE_KEYS = frozenset(
 )
 TPEX_OPENAPI_RANGE_CHUNK_BYTES = 64 * 1024
 TPEX_OPENAPI_RANGE_SEGMENT_ATTEMPTS = 3
-SOURCE_HTTP_SERVER_ERROR_ATTEMPTS = 3
+SOURCE_HTTP_TRANSIENT_ATTEMPTS = 3
 CSV_REQUIRED_COLUMNS_BY_SOURCE = {
     "twse_equity_quotes_daily": {
         "日期", "證券代號", "證券名稱", "成交股數", "開盤價", "最高價",
@@ -68,6 +68,14 @@ CSV_REQUIRED_COLUMNS_BY_SOURCE = {
         "日期", "契約", "商品名稱(契約名稱)", "到期月份(週別)", "交易人類別",
         "前五大交易人買方數量", "前五大交易人賣方數量",
         "前十大交易人買方數量", "前十大交易人賣方數量", "全市場未沖銷部位數",
+    },
+    "taifex_index_options_positions_daily": {
+        "日期", "商品名稱", "買賣權別", "身份別", "買方交易口數",
+        "買方交易契約金額(千元)", "賣方交易口數", "賣方交易契約金額(千元)",
+        "交易口數買賣淨額", "交易契約金額買賣淨額(千元)", "買方未平倉口數",
+        "買方未平倉契約金額(千元)", "賣方未平倉口數",
+        "賣方未平倉契約金額(千元)", "未平倉口數買賣淨額",
+        "未平倉契約金額買賣淨額(千元)",
     },
     "tpex_company_events": {
         "出表日期", "發言日期", "發言時間", "公司代號", "公司名稱", "主旨", "說明",
@@ -97,6 +105,18 @@ TAIFEX_LARGE_TRADER_JSON_REQUIRED_COLUMNS = {
     "Date", "Contract", "SettlementMonth", "TypeOfTraders",
     "Top5Buy", "Top5Sell", "Top10Buy", "Top10Sell", "OIOfMarket",
 }
+# TAIFEX now serves this operation as a JSON array (application/octet-stream)
+# even when CSV is requested; the CSV header contract no longer applies.
+TAIFEX_INDEX_OPTIONS_JSON_REQUIRED_COLUMNS = {
+    "Date", "ContractCode", "CallPut", "Item",
+    "TradingVolume(Net)", "OpenInterest(Net)",
+}
+TAIFEX_JSON_CAPABLE_CSV_SOURCES = {
+    "taifex_futures_large_trader_positions_daily": TAIFEX_LARGE_TRADER_JSON_REQUIRED_COLUMNS,
+    "taifex_index_options_positions_daily": TAIFEX_INDEX_OPTIONS_JSON_REQUIRED_COLUMNS,
+}
+# A WAF/rate-limit page served with HTTP 200 needs a real pause, not 1-2s.
+HTML_BODY_RETRY_BACKOFF_SECONDS = 10
 
 
 class IncompleteTPExOpenAPIResponseError(ValueError):
@@ -271,6 +291,115 @@ def _fetch_tpex_openapi_json_payload(
     return payload, int(last_status or 206)
 
 
+TWSE_MARGIN_DATED_URL = (
+    "https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
+    "?date={date}&selectType=STOCK&response=json"
+)
+TWSE_MARGIN_DATE_MIN_COMMON_CODES = 300
+TWSE_MARGIN_DATE_MIN_MATCH_RATIO = 0.99
+TWSE_MARGIN_DATE_LOOKBACK_WEEKDAYS = 5
+
+
+def _twse_margin_open_api_balances(rows: Any) -> dict[str, tuple[float, float]]:
+    """code -> (previous, today) margin-purchase balance from the dateless OpenAPI rows."""
+
+    balances: dict[str, tuple[float, float]] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("股票代號") or "").strip()
+        previous = parse_number(row.get("融資前日餘額"))
+        today = parse_number(row.get("融資今日餘額"))
+        if code and previous is not None and today is not None:
+            balances[code] = (float(previous), float(today))
+    return balances
+
+
+def _twse_margin_dated_balances(
+    day: dt.date, request_headers: dict[str, str],
+) -> dict[str, tuple[float, float]]:
+    """code -> (previous, today) margin balance from the official dated MI_MARGN report."""
+
+    response = requests.get(
+        TWSE_MARGIN_DATED_URL.format(date=day.strftime("%Y%m%d")),
+        headers=request_headers,
+        timeout=30,
+    )
+    if response.status_code != 200:
+        return {}
+    body = response.json()
+    if not isinstance(body, dict) or str(body.get("date") or "") != day.strftime("%Y%m%d"):
+        return {}
+    balances: dict[str, tuple[float, float]] = {}
+    for table in body.get("tables") or []:
+        fields = table.get("fields") or []
+        # the stock table repeats 前日餘額/今日餘額 for margin first, then short
+        if "代號" not in fields or fields.count("今日餘額") < 2:
+            continue
+        previous_index = fields.index("前日餘額")
+        today_index = fields.index("今日餘額")
+        for entry in table.get("data") or []:
+            code = str(entry[0] or "").strip()
+            previous = parse_number(entry[previous_index])
+            today = parse_number(entry[today_index])
+            if code and previous is not None and today is not None:
+                balances[code] = (float(previous), float(today))
+    return balances
+
+
+def _twse_margin_balance_data_date(
+    margin_url: str, request_headers: dict[str, str], rows: Any = None,
+) -> dt.date | None:
+    """Date the dateless TWSE OpenAPI MI_MARGN rows belong to.
+
+    The OpenAPI file is regenerated early the next morning, so an evening scan
+    holds the previous session's balances; no timestamp rule is reliable across
+    holidays and typhoon closures.  Instead the rows are matched against the
+    official dated report (which carries its own date): the date whose
+    (previous, today) margin balances agree for at least 99% of the common
+    codes wins.  No match, no data, or any failure returns None so the rows
+    stay quarantined instead of being stamped with a guessed date.
+    """
+
+    try:
+        observed = _twse_margin_open_api_balances(rows)
+        if len(observed) < TWSE_MARGIN_DATE_MIN_COMMON_CODES:
+            return None
+        quotes, _ = _fetch_source_json_payload(
+            "twse_equity_quotes_daily",
+            "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+            request_params=None,
+            request_headers=request_headers,
+        )
+        latest = _latest_twse_market_data_date(quotes)
+        if latest is None:
+            return None
+        candidate = latest
+        checked = 0
+        while checked < TWSE_MARGIN_DATE_LOOKBACK_WEEKDAYS:
+            if candidate.weekday() < 5:
+                checked += 1
+                try:
+                    dated = _twse_margin_dated_balances(candidate, request_headers)
+                except Exception as exc:  # noqa: BLE001 - one bad day must not stop the search
+                    print(
+                        f"[twse_margin_date] state=candidate_unavailable "
+                        f"candidate={candidate} error={type(exc).__name__}"
+                    )
+                    dated = {}
+                common = [code for code in observed if code in dated]
+                if len(common) >= TWSE_MARGIN_DATE_MIN_COMMON_CODES:
+                    matched = sum(1 for code in common if observed[code] == dated[code])
+                    if matched / len(common) >= TWSE_MARGIN_DATE_MIN_MATCH_RATIO:
+                        return candidate
+            candidate -= dt.timedelta(days=1)
+        print(f"[twse_margin_date] state=no_matching_report latest_quote_date={latest}")
+        return None
+    except Exception as exc:  # noqa: BLE001 - date stays unknown on any failure
+        print(f"[twse_margin_date] state=unavailable error={type(exc).__name__}")
+        return None
+
+
 def _fetch_source_json_payload(
     source_key: str,
     endpoint_url: str,
@@ -278,7 +407,7 @@ def _fetch_source_json_payload(
     request_params: dict[str, Any] | None,
     request_headers: dict[str, str],
 ) -> tuple[Any, int]:
-    """Fetch one bounded source JSON response, retrying transient HTTP 5xx."""
+    """Fetch one bounded JSON response, retrying transient source failures."""
 
     if source_key in TPEX_OPENAPI_RANGE_SOURCE_KEYS:
         return _fetch_tpex_openapi_json_payload(
@@ -288,7 +417,7 @@ def _fetch_source_json_payload(
             request_headers=request_headers,
         )
 
-    for attempt in range(1, SOURCE_HTTP_SERVER_ERROR_ATTEMPTS + 1):
+    for attempt in range(1, SOURCE_HTTP_TRANSIENT_ATTEMPTS + 1):
         response = None
         total_bytes = 0
         try:
@@ -301,13 +430,13 @@ def _fetch_source_json_payload(
                 stream=True,
             )
             status = int(response.status_code)
-            if 500 <= status < 600 and attempt < SOURCE_HTTP_SERVER_ERROR_ATTEMPTS:
+            if 500 <= status < 600 and attempt < SOURCE_HTTP_TRANSIENT_ATTEMPTS:
                 response.close()
                 response = None
                 print(
                     "[source_http_retry] "
                     f"source_key={source_key} attempt={attempt}/"
-                    f"{SOURCE_HTTP_SERVER_ERROR_ATTEMPTS} status={status}"
+                    f"{SOURCE_HTTP_TRANSIENT_ATTEMPTS} status={status}"
                 )
                 time.sleep(min(attempt, 2))
                 continue
@@ -348,8 +477,54 @@ def _fetch_source_json_payload(
                 )[:128]
                 exc.response_content_length = str(content_length or "unknown")[:64]
                 exc.response_bytes_received = total_bytes
+                if attempt < SOURCE_HTTP_TRANSIENT_ATTEMPTS:
+                    print(
+                        "[source_http_retry] "
+                        f"source_key={source_key} attempt={attempt}/"
+                        f"{SOURCE_HTTP_TRANSIENT_ATTEMPTS} reason=invalid_json "
+                        f"status={status} "
+                        f"content_type={exc.response_content_type} "
+                        f"bytes_received={total_bytes}"
+                    )
+                    if "html" in exc.response_content_type.lower():
+                        time.sleep(HTML_BODY_RETRY_BACKOFF_SECONDS * attempt)
+                    else:
+                        time.sleep(min(attempt, 2))
+                    continue
                 raise
             return payload, status
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ContentDecodingError,
+        ) as exc:
+            if response is not None and response.status_code is not None:
+                exc.http_status = int(response.status_code)
+                exc.source_key = source_key
+                exc.response_content_type = str(
+                    response.headers.get("Content-Type") or "unknown"
+                )[:128]
+                exc.response_content_length = str(
+                    response.headers.get("Content-Length") or "unknown"
+                )[:64]
+                exc.response_bytes_received = total_bytes
+            if attempt < SOURCE_HTTP_TRANSIENT_ATTEMPTS:
+                status_text = (
+                    str(response.status_code)
+                    if response is not None and response.status_code is not None
+                    else "unknown"
+                )
+                print(
+                    "[source_http_retry] "
+                    f"source_key={source_key} attempt={attempt}/"
+                    f"{SOURCE_HTTP_TRANSIENT_ATTEMPTS} "
+                    f"reason={type(exc).__name__} status={status_text} "
+                    f"bytes_received={total_bytes}"
+                )
+                time.sleep(min(attempt, 2))
+                continue
+            raise
         finally:
             if response is not None:
                 response.close()
@@ -363,9 +538,9 @@ def _fetch_source_csv_rows(
     *,
     request_headers: dict[str, str],
 ) -> tuple[list[dict[str, Any]], int]:
-    """Fetch one bounded official CSV batch, retrying transient HTTP 5xx."""
+    """Fetch one bounded CSV batch, retrying transient source failures."""
 
-    for attempt in range(1, SOURCE_HTTP_SERVER_ERROR_ATTEMPTS + 1):
+    for attempt in range(1, SOURCE_HTTP_TRANSIENT_ATTEMPTS + 1):
         response = None
         status: int | None = None
         content_length: str | None = None
@@ -379,13 +554,13 @@ def _fetch_source_csv_rows(
                 stream=True,
             )
             status = int(response.status_code)
-            if 500 <= status < 600 and attempt < SOURCE_HTTP_SERVER_ERROR_ATTEMPTS:
+            if 500 <= status < 600 and attempt < SOURCE_HTTP_TRANSIENT_ATTEMPTS:
                 response.close()
                 response = None
                 print(
                     "[source_http_retry] "
                     f"source_key={source_key} attempt={attempt}/"
-                    f"{SOURCE_HTTP_SERVER_ERROR_ATTEMPTS} status={status}"
+                    f"{SOURCE_HTTP_TRANSIENT_ATTEMPTS} status={status}"
                 )
                 time.sleep(min(attempt, 2))
                 continue
@@ -412,6 +587,11 @@ def _fetch_source_csv_rows(
                 # require the strict JSON/CSV schema below.
                 allowed_content_types.add("application/json")
                 allowed_content_types.add("application/octet-stream")
+            if source_key == "taifex_index_options_positions_daily":
+                # Read-only requests using Accept: application/json,
+                # application/json, text/csv, and text/csv all returned this
+                # official operation as CSV with application/octet-stream.
+                allowed_content_types.add("application/octet-stream")
             if source_key in {
                 "tpex_daytrade_eligibility_daily",
                 "tpex_quarterly_forecast_variance_events",
@@ -437,8 +617,9 @@ def _fetch_source_csv_rows(
 
             body = b"".join(chunks)
             decoded_body = body.decode("utf-8-sig")
+            taifex_json_columns = TAIFEX_JSON_CAPABLE_CSV_SOURCES.get(source_key)
             taifex_payload_is_json = (
-                source_key == "taifex_futures_large_trader_positions_daily"
+                taifex_json_columns is not None
                 and decoded_body.lstrip().startswith(("[", "{"))
             )
             if (
@@ -450,7 +631,7 @@ def _fetch_source_csv_rows(
                 ):
                     raise ValueError("TAIFEX JSON payload is not an array of objects")
                 if any(
-                    not TAIFEX_LARGE_TRADER_JSON_REQUIRED_COLUMNS.issubset(row)
+                    not taifex_json_columns.issubset(row)
                     for row in payload
                 ):
                     raise ValueError("TAIFEX JSON fields do not match the approved contract")
@@ -468,6 +649,32 @@ def _fetch_source_csv_rows(
             if len(rows) > MAX_SOURCE_ROWS:
                 raise ValueError("source row count exceeds limit")
             return rows, status
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ContentDecodingError,
+        ) as exc:
+            if response is not None and status is not None:
+                exc.http_status = status
+                exc.source_key = source_key
+                exc.response_content_type = str(
+                    response.headers.get("Content-Type") or "unknown"
+                )[:128]
+                exc.response_content_length = str(content_length or "unknown")[:64]
+                exc.response_bytes_received = total_bytes
+            if attempt < SOURCE_HTTP_TRANSIENT_ATTEMPTS:
+                print(
+                    "[source_http_retry] "
+                    f"source_key={source_key} attempt={attempt}/"
+                    f"{SOURCE_HTTP_TRANSIENT_ATTEMPTS} "
+                    f"reason={type(exc).__name__} "
+                    f"status={status if status is not None else 'unknown'} "
+                    f"bytes_received={total_bytes}"
+                )
+                time.sleep(min(attempt, 2))
+                continue
+            raise
         except Exception as exc:
             # Keep bounded transport diagnostics for CSV contract/decoding
             # failures, just as the JSON path does, without logging the body.
@@ -581,7 +788,7 @@ SOURCE_CONTRACTS = {
         "https://openapi.taifex.com.tw/v1/MarketDataOfMajorInstitutionalTradersDetailsOfFuturesContractsBytheDate",
     ),
     "taifex_index_options_positions_daily": (
-        "taifex_json",
+        "taifex_csv",
         "https://openapi.taifex.com.tw/v1/MarketDataOfMajorInstitutionalTradersDetailsOfCallsAndPutsBytheDate",
     ),
     "taifex_futures_large_trader_positions_daily": (
@@ -1291,8 +1498,8 @@ def _normalize_taifex_position_record(
         return _normalize_taifex_large_trader_record(source, raw)
 
     effective_date = parse_roc_date(_first_value(raw, "Date", "日期"))
-    contract_code = _first_value(raw, "ContractCode")
-    institution_type = _first_value(raw, "Item")
+    contract_code = _first_value(raw, "ContractCode", "商品名稱")
+    institution_type = _first_value(raw, "Item", "身份別")
     if not contract_code or str(contract_code).strip() not in set(
         config.get("contract_codes") or ()
     ):
@@ -1302,14 +1509,24 @@ def _normalize_taifex_position_record(
     institution_type = str(institution_type or "").strip()
     call_put = None
     if config.get("kind") == "taifex_index_option_position":
-        call_put = str(_first_value(raw, "CallPut") or "").strip().upper()
+        call_put = str(_first_value(raw, "CallPut", "買賣權別") or "").strip().upper()
         if call_put not in set(config.get("call_put_types") or ()):
             return None
-    net_trading_lots = parse_number(_first_value(raw, "TradingVolume(Net)"))
-    net_trading_value = parse_number(_first_value(raw, "TradingValue(Net)(Thousands)"))
-    net_open_interest_lots = parse_number(_first_value(raw, "OpenInterest(Net)"))
+    net_trading_lots = parse_number(
+        _first_value(raw, "TradingVolume(Net)", "交易口數買賣淨額")
+    )
+    net_trading_value = parse_number(
+        _first_value(raw, "TradingValue(Net)(Thousands)", "交易契約金額買賣淨額(千元)")
+    )
+    net_open_interest_lots = parse_number(
+        _first_value(raw, "OpenInterest(Net)", "未平倉口數買賣淨額")
+    )
     net_open_interest_value = parse_number(
-        _first_value(raw, "ContractValueofOpenInterest(Net)(Thousands)")
+        _first_value(
+            raw,
+            "ContractValueofOpenInterest(Net)(Thousands)",
+            "未平倉契約金額買賣淨額(千元)",
+        )
     )
     details = {
         "contract_code": contract_code,
@@ -2557,6 +2774,21 @@ def _normalize_market_record(
         date_key = "出表日期" if twse else "Date"
         date_raw = _first_value(raw, date_key)
         published_date = parse_roc_date(date_raw)
+        empty_row_metadata = {date_key, "市場別"}
+        if (
+            published_date
+            and not code_text
+            and not any(
+                key not in empty_row_metadata
+                and value is not None
+                and str(value).strip()
+                for key, value in raw.items()
+            )
+        ):
+            # Both official reports use a dated, otherwise empty row when
+            # there are no disclosures. The market label is still populated;
+            # treat this row as an empty batch, not an invalid stock event.
+            return None
         code_key = "公司代號" if twse else "SecuritiesCompanyCode"
         name_key = "公司名稱" if twse else "CompanyName"
         safe_record: dict[str, Any] = {
@@ -3257,6 +3489,24 @@ def fetch_and_normalize(
         rows = list(rows)
         if len(rows) > MAX_SOURCE_ROWS:
             raise ValueError("source row count exceeds limit")
+        if (
+            source["source_key"] == "twse_margin_balance_daily"
+            and rows
+            and not any(
+                isinstance(row, dict) and _first_value(row, "Date", "資料日期")
+                for row in rows
+            )
+        ):
+            margin_date = _twse_margin_balance_data_date(
+                source["endpoint_url"], request_headers, rows
+            )
+            if margin_date is not None:
+                roc_text = f"{margin_date.year - 1911}{margin_date.month:02d}{margin_date.day:02d}"
+                rows = [
+                    {**row, "Date": roc_text} if isinstance(row, dict) else row
+                    for row in rows
+                ]
+                print(f"[twse_margin_date] state=inferred effective_date={margin_date}")
         tdcc_incomplete_common_codes: set[str] = set()
         stock_market_by_code: dict[str, str] = {}
         if source["source_key"] == "tdcc_shareholder_distribution_weekly":

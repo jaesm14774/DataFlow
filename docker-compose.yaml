@@ -251,7 +251,8 @@ services:
         fi
         mkdir -p /sources/logs /sources/dags /sources/plugins
         chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
-        exec /entrypoint airflow version
+        /entrypoint airflow version &&
+          airflow pools set source_records_write 2 "Shared source_records write concurrency limit"
     # yamllint enable rule:line-length
     environment:
       <<: *airflow-common-env

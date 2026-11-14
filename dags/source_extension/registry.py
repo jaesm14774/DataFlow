@@ -725,6 +725,7 @@ def _insider_transfer_source_definitions() -> tuple[dict[str, Any], ...]:
                         "kind": "insider_transfer",
                         "market": market,
                         "report_type": report_type,
+                        "empty_result_is_valid": True,
                         "license": "Government Open Data License v1",
                         "license_url": "https://data.gov.tw/license",
                         "attribution": (
@@ -781,6 +782,7 @@ def _quarterly_forecast_source_definitions() -> tuple[dict[str, Any], ...]:
         {
             "source_key": "twse_quarterly_forecast_variance",
             "kind": "quarterly_forecast_variance",
+            "empty_result_is_valid": True,
             "endpoint_schedule": "intraday",
             "source_name": "TWSE listed-company quarterly forecast variance notices",
             "purpose": "收集TWSE官方已達當季10%或截至當季累計20%差異門檻的公司財測事件，作獨立事件通知、不納入多空分數",
@@ -796,6 +798,7 @@ def _quarterly_forecast_source_definitions() -> tuple[dict[str, Any], ...]:
         {
             "source_key": "tpex_quarterly_forecast_variance_events",
             "kind": "quarterly_forecast_variance_event",
+            "empty_result_is_valid": True,
             "endpoint_schedule": "intraday",
             "source_name": "TPEx OTC quarterly forecast variance threshold events",
             "purpose": (
@@ -842,6 +845,10 @@ def _quarterly_forecast_source_definitions() -> tuple[dict[str, Any], ...]:
                     "market": spec.get("market", "TWSE"),
                     "filter_to_stock_master": spec.get("filter_to_stock_master", True),
                     "access_basis": spec.get("access_basis", "official_public_openapi"),
+                    **(
+                        {"empty_result_is_valid": True}
+                        if spec.get("empty_result_is_valid") else {}
+                    ),
                 },
                 "fields": spec.get("common_fields", common_fields) + spec["value_fields"],
             }
@@ -1583,6 +1590,18 @@ def _taifex_option_position_source_definitions() -> tuple[dict[str, Any], ...]:
                 "kind": "taifex_index_option_position",
                 "contract_codes": ["臺指選擇權"],
                 "call_put_types": ["CALL", "PUT"],
+                "source_field_aliases": {
+                    "Date": ["日期"],
+                    "ContractCode": ["商品名稱"],
+                    "CallPut": ["買賣權別"],
+                    "Item": ["身份別"],
+                    "TradingVolume(Net)": ["交易口數買賣淨額"],
+                    "TradingValue(Net)(Thousands)": ["交易契約金額買賣淨額(千元)"],
+                    "OpenInterest(Net)": ["未平倉口數買賣淨額"],
+                    "ContractValueofOpenInterest(Net)(Thousands)": [
+                        "未平倉契約金額買賣淨額(千元)"
+                    ],
+                },
                 "access_basis": "official_openapi",
                 "documentation_url": "https://openapi.taifex.com.tw/",
                 "interpretation": "market_context_only_until_outcome_validation",
@@ -2015,6 +2034,31 @@ def _trading_status_source_definitions():
 
 SOURCE_DEFINITIONS += _trading_status_source_definitions()
 SOURCE_DEFINITIONS_BY_KEY = {item["source_key"]: item for item in SOURCE_DEFINITIONS}
+
+
+def source_allows_empty_result(source_key: str) -> bool:
+    """Return whether this source contract defines an empty result as no event."""
+    definition = SOURCE_DEFINITIONS_BY_KEY.get(source_key)
+    config = definition.get("config", {}) if definition else {}
+    return config.get("empty_result_is_valid") is True
+
+
+def source_batch_requires_review(
+    source_key: str,
+    *,
+    row_count: int,
+    accepted_count: int,
+    rejected_count: int,
+    duplicate_count: int,
+) -> bool:
+    """Check source batch accounting while honoring documented empty feeds."""
+    if row_count == 0 and not source_allows_empty_result(source_key):
+        return True
+    return (
+        rejected_count > 0
+        or row_count != accepted_count + rejected_count + duplicate_count
+        or (accepted_count == 0 and duplicate_count != row_count)
+    )
 
 
 def _runtime_definition_matches(source: dict[str, Any]) -> bool:

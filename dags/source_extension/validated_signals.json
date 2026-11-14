@@ -1,0 +1,33 @@
+{
+  "version": "validated_v1",
+  "validated_on": "2026-11-14",
+  "policy_started_on": "2026-11-14",
+  "report": "docs/signal_validation_report_20261114.md",
+  "note": "Only rules with status 'active' may be pushed to Discord. Set status to 'retired' to demote a rule; everything else stays in the ledger only.",
+  "rules": [
+    {
+      "id": "breakout_60d_volume",
+      "status": "active",
+      "label": "突破 60 日高＋爆量",
+      "horizon_sessions": 10,
+      "params": {
+        "lookback_sessions": 60,
+        "volume_avg_sessions": 20,
+        "volume_ratio_min": 2.0,
+        "min_turnover_ntd": 50000000,
+        "max_names_shown": 5
+      },
+      "evidence": {
+        "history": "2016-2026",
+        "oos_start": "2023-01-01",
+        "oos_dates": 886,
+        "mean_excess_pct": 0.77,
+        "mean_excess_after_cost_pct": 0.17,
+        "t_stat": 3.0,
+        "win_rate_pct": 41.0,
+        "base_win_rate_pct": 39.0,
+        "round_trip_cost_pct": 0.6
+      }
+    }
+  ]
+}

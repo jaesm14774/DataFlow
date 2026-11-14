@@ -15,37 +15,50 @@ from urllib.parse import urlsplit
 
 import pandas as pd
 import pendulum
-
 from airflow.operators.python import get_current_context
 from common.config import discord_token_path, sql_configure_path
 from lib.get_sql import get_sql
 from lib.notify import DiscordNotify
 from lib.taiwan_market_calendar import is_taiwan_stock_market_closed
+
 from source_extension.adapters import parse_number
-from source_extension.institutional_flow import format_flow_readiness
-from source_extension.equity_order_flow import load_equity_order_flow
 from source_extension.backtest_diagnostics import summarize_daily_backtest
+from source_extension.equity_order_flow import load_equity_order_flow
+from source_extension import research_signals, validated_signals, validated_tracking
 from source_extension.outcome_lifecycle import (
     FOLLOWUP_HORIZONS,
-    direction_sign,
     directional_excursion_pct,
     first_session_on_or_after_sorted,
     followup_target_date,
     percent_return,
     summarize_followup_rows,
 )
-from source_extension.signal_policy import (
-    POLICY_VERSION, evidence_balance, is_observed_market_session, profitability_vote,
-    merge_stored_quote_history, quote_window, revenue_period_current,
-    strip_negated_terms, trading_risk_action, trading_sessions,
+from source_extension.registry import (
+    _open_connection,
+    source_batch_requires_review,
 )
-from source_extension.registry import _open_connection
 from source_extension.schema import create_schema
-
+from source_extension.signal_policy import (
+    POLICY_VERSION,
+    evidence_balance,
+    is_observed_market_session,
+    merge_stored_quote_history,
+    profitability_vote,
+    quote_window,
+    revenue_period_current,
+    strip_negated_terms,
+    trading_risk_action,
+    trading_sessions,
+)
 
 NOTIFICATION_CHANNEL = "新聞即時通"
 MAX_INTRADAY_CANDIDATES_PER_RUN = 60
 DAILY_DIGEST_LIMIT = 10
+# Push policy (see docs/signal_validation_report_20261114.md): only signals that
+# passed out-of-sample validation reach Discord. Flip either flag to restore the
+# legacy behaviour (everything is still recorded in the ledger either way).
+VALIDATED_DIGEST_MODE = True
+INTRADAY_PUSH_ENABLED = False
 NEWS_CONTEXT_LOOKBACK_HOURS = 48
 NEWS_CONTEXT_INGEST_SCAN_LIMIT = 10_000
 NEWS_CONTEXT_SAMPLE_LIMIT = 6_000
@@ -61,6 +74,12 @@ TDCC_SHAREHOLDING_MIN_MARKET_COVERAGE = 0.95
 TDCC_SHAREHOLDING_CONTEXT_CHANGE_PP = 2.0
 DISCORD_EMBED_CHAR_LIMIT = 5_500
 DISCORD_EMBED_COUNT_LIMIT = 10
+# Discord limits embeds to 6,000 characters and 10 per message, but the webhook
+# also rejects oversized request bodies (HTTP 413 / code 40005), and ASCII-escaped
+# CJK JSON is ~6 bytes per character, so the character budget alone is not enough.
+# Observed: a 13,624-byte body and a 22,586-byte batch were rejected; batches up
+# to 9,885 bytes were accepted. Keep this at 10,000; do not raise it without
+# a verified Discord delivery at the new size.
 DISCORD_REQUEST_BYTE_LIMIT = 10_000
 MIN_DAILY_MARKET_COVERAGE = 0.70
 DAILY_FAMILY_SOURCE_GROUPS = {
@@ -74,16 +93,11 @@ DAILY_FAMILY_SOURCE_GROUPS = {
 }
 TAIFEX_POSITION_SOURCE_KEY = "taifex_index_futures_positions_daily"
 TAIFEX_POSITION_EVENT_TYPE = "market_institutional_positioning_daily"
-TAIFEX_OPTION_POSITION_SOURCE_KEY = "taifex_index_options_positions_daily"
-TAIFEX_LARGE_TRADER_SOURCE_KEY = "taifex_futures_large_trader_positions_daily"
-TAIFEX_LARGE_TRADER_EVENT_TYPE = "market_futures_large_trader_oi_daily"
 TAIFEX_POSITION_CONTRACTS = {
     "臺股期貨": "上市指數期貨",
     "櫃買指數期貨": "上櫃指數期貨",
 }
 TAIFEX_POSITION_INSTITUTIONS = ("外資及陸資", "投信", "自營商")
-TAIFEX_OPTION_POSITION_CONTRACT = "臺指選擇權"
-TAIFEX_OPTION_POSITION_CALL_PUTS = ("CALL", "PUT")
 INTRADAY_CURSOR_KEY = "intraday_source_record_id_cursor"
 SOURCE_COLLECTION_ALERT_STATE_KEY = "intraday_source_collection_alert_fingerprint"
 INTRADAY_LOOKBACK_DAYS = 7
@@ -610,6 +624,43 @@ def _open_stock_connection():
     )
 
 
+def _load_research_news_polarity(
+    master: dict[str, dict[str, Any]], sessions: list[dt.date], observed_at: dt.datetime,
+) -> dict[str, dict[str, Any]]:
+    """Research-only: 5-session news title counts per stock; failure never blocks the scan."""
+
+    if len(sessions) < research_signals.NEWS_WINDOW_SESSIONS:
+        return {}
+    news_conn = news_cursor = news_engine = None
+    try:
+        trie, codes = research_signals.build_name_trie(
+            (code, info.get("name")) for code, info in master.items()
+        )
+        start = research_signals.news_window_start(sessions)
+        if start is None:
+            return {}
+        news_conn, news_cursor, news_engine = _open_news_connection()
+        # same ingestion-time gate as the card's news sample: nothing that landed
+        # after the scan began can enter the research scores
+        news_cursor.execute(
+            """
+            SELECT title, created_at FROM news
+            WHERE create_time <= %s AND created_at >= %s AND created_at <= %s
+              AND title IS NOT NULL AND TRIM(title) <> ''
+            """,
+            (observed_at, start, observed_at),
+        )
+        return research_signals.news_polarity_by_code(news_cursor.fetchall(), sessions, trie, codes)
+    except Exception as exc:  # pragma: no cover - optional research feed
+        print(f"[market signal] research news polarity unavailable | {type(exc).__name__}")
+        return {}
+    finally:
+        if news_conn:
+            news_conn.close()
+        if news_engine:
+            news_engine.dispose()
+
+
 def _open_news_connection():
     connection = pd.read_csv(sql_configure_path, index_col="name")
     return get_sql(
@@ -697,19 +748,20 @@ def _source_collection_state(
     if not latest_by_task or any(str(row[4]) != "success" for row in latest_by_task.values()):
         return "partial"
 
-    # A green task is not a clean batch when it leaves source rows quarantined,
-    # reports no parsed rows, or cannot account for every normalized row.
-    # Duplicates are accounted separately and are not by themselves an error.
+    # A green task is not a clean batch when it leaves source rows quarantined
+    # or cannot account for every normalized row. Some event feeds explicitly
+    # define an empty result as no qualifying event.
     for row in latest_by_task.values():
         row_count = int(row[7] or 0)
         accepted_count = int(row[8] or 0)
         rejected_count = int(row[9] or 0)
         duplicate_count = int(row[10] or 0)
-        if (
-            row_count == 0
-            or rejected_count > 0
-            or row_count != accepted_count + rejected_count + duplicate_count
-            or (row_count > 0 and accepted_count == 0 and duplicate_count != row_count)
+        if source_batch_requires_review(
+            str(row[0]),
+            row_count=row_count,
+            accepted_count=accepted_count,
+            rejected_count=rejected_count,
+            duplicate_count=duplicate_count,
         ):
             return "data_review_required"
     return "complete"
@@ -770,9 +822,12 @@ def _source_collection_issues(
         no_accepted_records = (
             row_count > 0 and accepted_count == 0 and duplicate_count != row_count
         )
-        if (
-            is_success and rejected_count <= 0 and row_count > 0
-            and not row_accounting_mismatch and not no_accepted_records
+        if is_success and not source_batch_requires_review(
+            str(source_key),
+            row_count=row_count,
+            accepted_count=accepted_count,
+            rejected_count=rejected_count,
+            duplicate_count=duplicate_count,
         ):
             continue
         source_name = str(row[5] or source_key)
@@ -1341,105 +1396,6 @@ def _load_intraday_candidates(
     if increment:
         diagnostics["new_candidate_count"] = len(result)
     return result, next_cursor
-
-
-def _load_intraday_revenue_context(
-    cursor,
-    *,
-    source_key: str,
-    entity_id: str,
-    effective_date: Any,
-    started_at: dt.datetime,
-    source_updated_at_cutoff: dt.datetime,
-) -> dict[str, Any]:
-    """Load exact prior-month and three-month revenue context as of this scan."""
-
-    period = _date_only(effective_date)
-    if period is None:
-        return {
-            "previous_revenue_period": None,
-            "previous_revenue_yoy_pct": None,
-            "revenue_3m_context_status": "unavailable_effective_date",
-            "revenue_3m_missing_periods": [],
-            "revenue_ytd_yoy_pct": None,
-        }
-    period = dt.date(period.year, period.month, 1)
-    latest_month_index = period.year * 12 + period.month - 1
-    expected_periods = []
-    for month_index in range(latest_month_index - 2, latest_month_index + 1):
-        year, month_zero = divmod(month_index, 12)
-        expected_periods.append(dt.date(year, month_zero + 1, 1))
-
-    cursor.execute(
-        MONTHLY_REVENUE_ASOF_CTE + """
-        SELECT r.effective_date, r.event_time, r.metric_value,
-               r.payload,
-               r.id
-        FROM monthly_revenue_snapshot r
-        WHERE r.source_key=%s AND r.entity_type='stock'
-          AND r.entity_id=%s AND r.event_type='monthly_revenue'
-          AND r.quality_status='ok'
-          AND r.effective_date>=%s AND r.effective_date<=%s
-          AND r.event_time IS NOT NULL AND r.event_time<=%s
-        ORDER BY r.effective_date, r.event_time, r.id
-        """,
-        (
-            source_updated_at_cutoff, source_updated_at_cutoff,
-            source_updated_at_cutoff, source_updated_at_cutoff,
-            source_key, entity_id, expected_periods[0], period, started_at,
-        ),
-    )
-    history_rows = []
-    for row in cursor.fetchall():
-        row_period = _date_only(row[0])
-        if row_period is None:
-            continue
-        try:
-            raw_payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
-        except (TypeError, ValueError):
-            raw_payload = {}
-        if not isinstance(raw_payload, dict):
-            raw_payload = {}
-        history_rows.append(
-            (
-                dt.date(row_period.year, row_period.month, 1), row[1],
-                _number(row[2]),
-                parse_number(raw_payload.get("營業收入-當月營收")),
-                parse_number(raw_payload.get("營業收入-去年當月營收")),
-                parse_number(raw_payload.get("累計營業收入-前期比較增減(%)")),
-                "", "", "", int(row[4] or 0),
-            )
-        )
-
-    latest_by_period: dict[dt.date, tuple[Any, ...]] = {}
-    for row in history_rows:
-        latest_by_period[row[0]] = row
-    previous_period = expected_periods[-2]
-    previous_row = latest_by_period.get(previous_period)
-    previous_yoy = _number(previous_row[2]) if previous_row else None
-    missing_periods = [
-        value.strftime("%Y-%m")
-        for value in expected_periods
-        if value not in latest_by_period
-    ]
-    trailing_context = _trailing_three_month_revenue_context(history_rows)
-    if trailing_context:
-        context_status = "complete"
-    elif missing_periods:
-        context_status = "missing_periods"
-    else:
-        context_status = "missing_or_invalid_baseline"
-    current_row = latest_by_period.get(period)
-    return {
-        "previous_revenue_period": previous_period.isoformat(),
-        "previous_revenue_yoy_pct": previous_yoy,
-        "revenue_3m_context_status": context_status,
-        "revenue_3m_missing_periods": missing_periods,
-        "revenue_ytd_yoy_pct": (
-            _number(current_row[5]) if current_row is not None else None
-        ),
-        **trailing_context,
-    }
 
 
 def _insert_candidates(cursor, run_key: str, candidates: list[dict[str, Any]]) -> None:
@@ -2712,6 +2668,8 @@ def _load_daily_candidates(
 
     candidates: list[dict[str, Any]] = []
     evidence_snapshots: list[dict[str, Any]] = []
+    research_scores_by_code: dict[str, dict[str, float]] = {}
+    research_trailing_5d: dict[str, float] = {}
 
     family_trigger_counts: dict[str, int] = {}
     candidate_filter_counts = {"evaluated_stocks": 0, "below_three_directional_families": 0}
@@ -3302,6 +3260,17 @@ def _load_daily_candidates(
 
             candidate_selected = len(family_directions) >= 3
             evidence_direction = direction if family_directions else "訊號不足"
+            # Research-only shadow families: stored for backtesting, never
+            # part of family_directions, candidate selection or notifications.
+            research_raw = research_signals.collect_forward_scores(
+                positioning_context, revenue_context,
+                return_5d_pct=price_context.get("return_5d_pct"),
+                closes=closes if len(closes) >= 16 else None,
+            )
+            if research_raw:
+                research_scores_by_code[code] = research_raw
+            if isinstance(price_context.get("return_5d_pct"), (int, float)):
+                research_trailing_5d[code] = float(price_context["return_5d_pct"])
             evidence_hash = hashlib.sha256(
                 f"evidence|{POLICY_VERSION}|{as_of_date}|{code}".encode("utf-8")
             ).hexdigest()
@@ -3390,8 +3359,49 @@ def _load_daily_candidates(
             )
 
     evaluation_universe_count = candidate_filter_counts["evaluated_stocks"]
+    research_directions, research_scored_counts = research_signals.assign_forward_directions(
+        research_scores_by_code,
+        {str(item.get("entity_id") or ""): str(item.get("market") or "") for item in evidence_snapshots},
+    )
+    # News-title polarity is an event family (not a decile rank): same thresholds as
+    # the historical study, plus whether the title merely restates the trailing move.
+    news_stats = _load_research_news_polarity(
+        master,
+        sorted(set().union(*price_session_dates_by_market.values())) if as_of_date else [],
+        started_at,
+    ) if as_of_date else {}
+    news_family_key = research_signals.research_family_key(research_signals.NEWS_POLARITY_FAMILY)
+    news_scored_counts: dict[str, int] = {}
+    news_context_by_code: dict[str, dict[str, Any]] = {}
+    for item in evidence_snapshots:
+        code = str(item.get("entity_id") or "")
+        row = news_stats.get(code)
+        if not row:
+            continue
+        market = str(item.get("market") or "")
+        if row.get("labelled", 0) >= research_signals.NEWS_POLARITY_MIN_LABELLED:
+            news_scored_counts[market] = news_scored_counts.get(market, 0) + 1
+        direction_value = research_signals.news_polarity_direction(row)
+        trailing = research_trailing_5d.get(code)
+        context = dict(row)
+        if direction_value:
+            research_directions.setdefault(code, {})[news_family_key] = direction_value
+            if isinstance(trailing, (int, float)):
+                context["agrees_with_trailing_5d"] = (
+                    (trailing > 0) - (trailing < 0)
+                ) == direction_value
+        news_context_by_code[code] = context
+        research_scores_by_code.setdefault(code, {})[news_family_key] = row["polarity"]
+    research_scored_counts[news_family_key] = news_scored_counts
     for evidence in evidence_snapshots:
         evidence["details"]["evaluation_universe_count"] = evaluation_universe_count
+        code = str(evidence.get("entity_id") or "")
+        evidence["details"]["research_policy_version"] = research_signals.RESEARCH_POLICY_VERSION
+        evidence["details"]["research_scores"] = research_scores_by_code.get(code, {})
+        evidence["details"]["research_family_directions"] = research_directions.get(code, {})
+        evidence["details"]["research_scored_counts"] = research_scored_counts
+        if code in news_context_by_code:
+            evidence["details"]["research_news_context"] = news_context_by_code[code]
 
     if as_of_date and candidates:
         financing_context = _load_material_convertible_bond_cash_context(
@@ -5778,6 +5788,8 @@ def _classify_company_event(title: str, description: str) -> dict[str, str]:
     for negated_phrase in (
         "未發生重大損失", "未有重大損失", "未發生損失", "未發生虧損",
         "不會造成虧損", "並無虧損", "沒有虧損",
+        # Accounting terms for discontinued operations, not a business stoppage.
+        "停業部門", "停業單位", "停業單位損益", "停業部門損益",
     ):
         risk_text = risk_text.replace(negated_phrase, "")
     risk_terms = (
@@ -5823,6 +5835,18 @@ def _classify_company_event(title: str, description: str) -> dict[str, str]:
         return {
             "materiality": "key", "label": "偏空風險", "direction": "偏空",
             "action": "先讀公告內容與金額影響；未釐清前暫緩新進場",
+        }
+    if "更正" in headline and any(
+        term in headline for term in ("營收", "財報", "財務報告", "財務報表")
+    ):
+        return {
+            "materiality": "review", "label": "財報/營收更正｜數字待核",
+            "direction": "中性事件",
+            "action": (
+                "公司更正已公告的財務數字。比對更正前後的營收與獲利，"
+                "確認只是會計分類調整（例如拆分停業部門）還是實質數字變動；"
+                "確認前不單憑這則公告進出。"
+            ),
         }
     if (
         any(term in text for term in ("授信資產", "金融機構債權"))
@@ -5874,6 +5898,8 @@ def _summarize_company_event(description: str) -> str:
     financial_changes = _extract_financial_change_percentages(compact)
     month_quarter_table = "最近一月" in compact and "最近一季" in compact
     for label, percentages in financial_changes.items():
+        if not percentages:
+            continue
         if month_quarter_table and len(percentages) > 1:
             facts.append(
                 f"{label}同期增減：最近一月 {percentages[0]:+g}%；"
@@ -6048,8 +6074,11 @@ def _summarize_company_event(description: str) -> str:
         facts.append("未涉及營運模式變更")
     if "例行性業務" in compact and not any("例行" in fact for fact in facts):
         facts.append("公告稱屬例行性業務")
+    if facts and all(fact.startswith("事實/交易期間") for fact in facts):
+        # A bare date says nothing; show the official wording as well.
+        facts.insert(0, _sanitize(compact, 240))
     if facts:
-        return "\n".join(f"• {_sanitize(fact, 180)}" for fact in facts)[:850]
+        return "\n".join(f"• {_sanitize(fact, 240)}" for fact in facts)[:850]
     return _sanitize(compact, 850)
 
 
@@ -6245,10 +6274,6 @@ def _daily_signal_explanations(row: dict[str, Any], detail: dict[str, Any]) -> d
     return output
 
 
-def _daily_signal_texts(row: dict[str, Any], detail: dict[str, Any]) -> list[str]:
-    return list(_daily_signal_explanations(row, detail).values())[:8]
-
-
 def _daily_candidate_action(detail: dict[str, Any]) -> tuple[str, str]:
     direction = detail.get("direction")
     levels = detail.get("price_levels") or {}
@@ -6306,7 +6331,69 @@ def _safe_news_article_url(value: Any) -> str:
     return raw
 
 
+_CARD_LINK_RE = re.compile(r"｜?\[[^\]]*\]\(https?://[^)\s]*\)")
+# Only the "not scored" annotations go; facts in the same parentheses stay.
+_CARD_ANNOTATION_ONLY_PAREN_RE = re.compile(
+    r"（(?:背景|不計分|不另計|不計入)[^（）]*）"
+)
+_CARD_ANNOTATION_SUFFIX_RE = re.compile(
+    r"[；，](?:背景|不計分|不另計|不計入)[^；，（）]*"
+)
+_CARD_BOILERPLATE_RE = re.compile(
+    r"[；;，,]?[^；;，,｜\n]*(?:不計多空分數|不計入多空分數|未列欄位保留為缺值|"
+    r"僅列官方期末存量比率|缺列不填零)[^；;，,｜\n]*"
+)
+_CARD_DROP_FIELD_PREFIXES = ("法人與分點資料", "資產負債脈絡")
+
+
+def _compact_candidate_embed(embed: dict[str, Any]) -> dict[str, Any]:
+    """Keep what a reader acts on; drop methodology, provenance and source links."""
+
+    def clean(text: str) -> str:
+        text = _CARD_LINK_RE.sub("", text)
+        text = _CARD_ANNOTATION_ONLY_PAREN_RE.sub("", text)
+        text = _CARD_ANNOTATION_SUFFIX_RE.sub("", text)
+        text = text.replace("（）", "")
+        text = _CARD_BOILERPLATE_RE.sub("", text)
+        return re.sub(r"[；;｜]\s*$", "", text.strip())
+
+    fields = []
+    for field in embed.get("fields") or []:
+        name = str(field.get("name") or "")
+        if name.startswith(_CARD_DROP_FIELD_PREFIXES):
+            continue
+        name = re.sub(r"（(?:不另計訊號家族|不計分|不計入多空訊號)）", "", name)
+        value = clean(str(field.get("value") or ""))
+        if name.endswith("脈絡") and len(value) > 400:
+            value = value[:399] + "…"
+        if value:
+            fields.append({**field, "name": name, "value": value[:1024]})
+    description = str(embed.get("description") or "")
+    date_part = description.split("｜", 1)[0]
+    group_line = next(
+        (line for line in description.split("\n") if line.startswith("底層資料群")), ""
+    )
+    group_line = group_line.replace("；家族數不等於獨立來源數。", "")
+    return {
+        **embed,
+        "description": "\n".join(part for part in (date_part, group_line) if part),
+        "fields": fields,
+        "footer": {
+            "text": "規則式觀察名單，不是買進建議或停損價"
+            + (
+                "｜較早行情取自既有股票表，非不可變版本"
+                if "較早行情" in str((embed.get("footer") or {}).get("text") or "")
+                else ""
+            )
+        },
+    }
+
+
 def _daily_candidate_embed(row: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
+    return _compact_candidate_embed(_daily_candidate_embed_full(row, detail))
+
+
+def _daily_candidate_embed_full(row: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
     direction = str(detail.get("direction") or "訊號分歧")
     if direction not in {"偏多", "偏空", "訊號分歧"}:
         direction = "訊號分歧"
@@ -7030,213 +7117,102 @@ def _load_daily_market_breadth(
     return {"markets": markets}
 
 
-def _load_tpex_daytrade_market_context(
-    cursor, as_of_date: dt.date | None, started_at: dt.datetime | None,
-) -> dict[str, Any]:
-    """Load same-date TPEx day-trade market aggregate as non-directional context."""
+def _load_daily_index_moves(cursor, as_of_date: dt.date | None) -> dict[str, dict[str, Any]]:
+    """Official index close and day-over-day change for 加權/櫃買."""
 
-    empty = {
-        "source_date": None,
-        "quality_status": None,
-        "values": None,
-        "five_session_change_pp": None,
-        "complete_session_count": 0,
-    }
-    if not as_of_date or not started_at:
-        return empty
-    updated_at_cutoff = _source_updated_at_cutoff_utc(started_at)
-    source_key = "tpex_daytrade_market_summary_daily"
-    event_type = "market_daytrade_aggregate_daily"
-    cursor.execute(
-        MARKET_CONTEXT_ASOF_CTE + """
-        SELECT effective_date, quality_status, metric_value, value_text
-        FROM market_context_snapshot
-        WHERE source_key=%s AND event_type=%s AND entity_type='macro'
-          AND effective_date<=%s
-        ORDER BY effective_date DESC, id DESC
-        LIMIT 1
-        """,
-        (updated_at_cutoff, updated_at_cutoff, updated_at_cutoff, updated_at_cutoff,
-         source_key, event_type, as_of_date),
-    )
-    latest = cursor.fetchone()
-    if not latest:
-        return empty
-    source_date = _date_only(latest[0])
-    context = {**empty, "source_date": source_date, "quality_status": str(latest[1] or "unknown")}
-    if context["quality_status"] != "ok":
-        return context
+    if as_of_date is None:
+        return {}
     try:
-        details = json.loads(latest[3] or "{}")
-    except (TypeError, ValueError):
-        return {**context, "quality_status": "invalid_payload"}
-    required_values = (
-        "daytrade_volume_shares", "daytrade_volume_share_pct",
-        "daytrade_buy_value_twd", "daytrade_buy_value_share_pct",
-        "daytrade_sell_value_twd", "daytrade_sell_value_share_pct",
-    )
-    values = {key: _number(details.get(key)) for key in required_values}
-    if any(value is None for value in values.values()):
-        return {**context, "quality_status": "invalid_payload"}
-    context["values"] = values
-
-    if source_date != as_of_date:
-        return context
-
-    # Use official TPEx index dates, not an assumed sequence of aggregate rows.
-    # End the comparison at T-2 because the exchange says T-day values can be
-    # revised through T+2; the same-day reading remains preliminary context.
-    cursor.execute(
-        MARKET_CONTEXT_ASOF_CTE + """
-        SELECT DISTINCT effective_date
-        FROM market_context_snapshot
-        WHERE source_key='tpex_market_index_daily'
-          AND event_type='market_index_daily' AND entity_type='macro'
-          AND quality_status='ok' AND effective_date<=%s
-        ORDER BY effective_date DESC
-        LIMIT 8
-        """,
-        (updated_at_cutoff, updated_at_cutoff, updated_at_cutoff, updated_at_cutoff,
-         as_of_date),
-    )
-    session_dates = [_date_only(row[0]) for row in cursor.fetchall()]
-    session_dates = [value for value in session_dates if value]
-    if len(session_dates) != 8 or session_dates[0] != as_of_date:
-        return context
-    placeholders = ",".join(["%s"] * len(session_dates))
-    cursor.execute(
-        MARKET_CONTEXT_ASOF_CTE + f"""
-        SELECT effective_date, quality_status, metric_value, value_text
-        FROM market_context_snapshot
-        WHERE source_key=%s AND event_type=%s AND entity_type='macro'
-          AND effective_date IN ({placeholders})
-        ORDER BY effective_date DESC
-        """,
-        (updated_at_cutoff, updated_at_cutoff, updated_at_cutoff, updated_at_cutoff,
-         source_key, event_type, *session_dates),
-    )
-    history: dict[dt.date, tuple[str, float | None]] = {}
-    for effective_date, quality_status, metric_value, value_text in cursor.fetchall():
-        period = _date_only(effective_date)
-        try:
-            detail = json.loads(value_text or "{}")
-        except (TypeError, ValueError):
-            detail = {}
-        value = _number(detail.get("daytrade_volume_share_pct"))
-        if value is None:
-            value = _number(metric_value)
-        if period:
-            history[period] = (str(quality_status or "unknown"), value)
-    if all(
-        period in history and history[period][0] == "ok" and history[period][1] is not None
-        for period in session_dates
-    ):
-        context["five_session_change_pp"] = (
-            history[session_dates[2]][1] - history[session_dates[7]][1]
-        )
-        context["five_session_change_end_date"] = session_dates[2]
-        context["five_session_change_start_date"] = session_dates[7]
-        context["complete_session_count"] = 8
-    return context
-
-
-def _load_daily_market_total_return_context(
-    cursor, as_of_date: dt.date | None, started_at: dt.datetime | None,
-) -> dict[str, dict[str, Any]]:
-    """Load point-in-time market total-return context, separate from stock scores."""
-
-    source_definitions = {
-        "上市": ("twse_market_total_return_index_daily", "TAIEX_TR"),
-        "上櫃": ("tpex_market_total_return_index_daily", "TPEX_TR"),
-    }
-    empty = {
-        market: {
-            "source_date": None,
-            "quality_status": None,
-            "index_code": index_code,
-            "five_session_return_pct": None,
-            "window_start_date": None,
-            "window_end_date": None,
-            "complete_session_count": 0,
-        }
-        for market, (_, index_code) in source_definitions.items()
-    }
-    if not as_of_date or not started_at:
-        return empty
-
-    updated_at_cutoff = _source_updated_at_cutoff_utc(started_at)
-    context_by_market: dict[str, dict[str, Any]] = {}
-    for market, (source_key, index_code) in source_definitions.items():
         cursor.execute(
-            MARKET_CONTEXT_ASOF_CTE + """
-            SELECT effective_date, quality_status, metric_value
-            FROM market_context_snapshot
-            WHERE source_key=%s AND event_type='market_total_return_index_daily'
-              AND entity_type='macro' AND effective_date<=%s
-            ORDER BY effective_date DESC, id DESC
-            LIMIT 6
+            """
+            SELECT entity_id, effective_date, metric_value
+            FROM source_records
+            WHERE event_type='market_index_daily' AND entity_type='macro'
+              AND quality_status='ok' AND entity_id IN ('TAIEX','TPEX')
+              AND effective_date<=%s
+              AND effective_date>=DATE_SUB(%s, INTERVAL 14 DAY)
+              AND metric_value IS NOT NULL
+            ORDER BY entity_id, effective_date DESC, id DESC
             """,
-            (updated_at_cutoff, updated_at_cutoff, updated_at_cutoff, updated_at_cutoff,
-             source_key, as_of_date),
+            (as_of_date, as_of_date),
         )
         rows = cursor.fetchall()
-        if not rows:
-            context_by_market[market] = dict(empty[market])
+    except Exception as exc:  # noqa: BLE001 - display-only context
+        print(f"[market signal] index move unavailable | {type(exc).__name__}")
+        return {}
+    by_code: dict[str, list[tuple[dt.date, float]]] = {}
+    for code, period, value in rows:
+        period = _date_only(period)
+        number = _number(value)
+        if period is None or number is None:
             continue
-
-        dates = [_date_only(row[0]) for row in rows]
-        latest_date = dates[0]
-        context = {
-            **empty[market],
-            "source_date": latest_date,
-            "quality_status": str(rows[0][1] or "unknown"),
+        series = by_code.setdefault(str(code), [])
+        if not any(existing_date == period for existing_date, _ in series):
+            series.append((period, float(number)))
+    moves: dict[str, dict[str, Any]] = {}
+    for market, code in (("上市", "TAIEX"), ("上櫃", "TPEX")):
+        series = by_code.get(code) or []
+        if len(series) < 2:
+            continue
+        (latest_date, latest), (previous_date, previous) = series[0], series[1]
+        # A missing index row would turn a multi-day move into "today's" move.
+        if not previous or (latest_date - previous_date).days > 4:
+            continue
+        moves[market] = {
+            "date": latest_date, "close": latest, "prev_close": previous,
+            "change_pct": (latest / previous - 1) * 100,
         }
-        context_by_market[market] = context
-        if context["quality_status"] != "ok" or latest_date != as_of_date:
-            continue
+    return moves
 
-        dated_values: dict[dt.date, float] = {}
-        invalid_dates: set[dt.date] = set()
-        for effective_date, quality_status, metric_value in rows:
-            period = _date_only(effective_date)
-            value = _number(metric_value)
-            if not period:
-                continue
-            if (
-                str(quality_status or "unknown") != "ok"
-                or value is None
-                or not math.isfinite(value)
-                or value <= 0
-                or period in dated_values
-            ):
-                invalid_dates.add(period)
-            else:
-                dated_values[period] = value
 
-        context["complete_session_count"] = sum(
-            period in dated_values and period not in invalid_dates
-            for period in set(dates)
-            if period is not None
+def _load_signal_scoreboard(cursor, as_of_date: dt.date | None) -> dict[str, Any]:
+    """Settled next-close outcomes of the candidates actually sent (entity_type
+    'stock'), direction-adjusted and relative to the market. The all-market
+    'stock_evidence' snapshots are a control group and must not be mixed in."""
+
+    try:
+        cursor.execute(
+            """
+            SELECT o.direction, o.horizon_sessions, COUNT(*),
+                   AVG(o.directional_hit),
+                   AVG(CASE WHEN o.direction='偏空' THEN -o.excess_return_pp
+                            ELSE o.excess_return_pp END)
+            FROM market_signal_outcomes o
+            INNER JOIN market_signal_candidates c
+                ON c.id=o.candidate_id AND c.entity_type='stock'
+            WHERE o.status='settled' AND o.outcome_basis='next_close'
+              AND o.direction IN ('偏多','偏空') AND o.horizon_sessions IN (1,5)
+              AND o.excess_return_pp IS NOT NULL AND o.directional_hit IS NOT NULL
+              AND (%s IS NULL OR o.signal_date<=%s)
+            GROUP BY o.direction, o.horizon_sessions
+            """,
+            (as_of_date, as_of_date),
         )
-        if (
-            len(rows) != 6
-            or len(set(dates)) != 6
-            or any(period is None for period in dates)
-            or len(dated_values) != 6
-            or invalid_dates
-        ):
-            continue
-
-        ordered_dates = [period for period in dates if period is not None]
-        current_value = dated_values[ordered_dates[0]]
-        starting_value = dated_values[ordered_dates[-1]]
-        context["five_session_return_pct"] = (
-            (current_value / starting_value - 1.0) * 100.0
+        grouped = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT o.signal_date) FROM market_signal_outcomes o
+            INNER JOIN market_signal_candidates c
+                ON c.id=o.candidate_id AND c.entity_type='stock'
+            WHERE o.status='settled' AND o.outcome_basis='next_close'
+              AND o.direction IN ('偏多','偏空') AND o.horizon_sessions IN (1,5)
+              AND (%s IS NULL OR o.signal_date<=%s)
+            """,
+            (as_of_date, as_of_date),
         )
-        context["window_start_date"] = ordered_dates[-1]
-        context["window_end_date"] = ordered_dates[0]
-
-    return context_by_market
+        days = int((cursor.fetchone() or [0])[0] or 0)
+    except Exception as exc:  # noqa: BLE001 - display-only context
+        print(f"[market signal] scoreboard unavailable | {type(exc).__name__}")
+        return {}
+    rows = {
+        (str(direction), int(horizon)): {
+            "n": int(count or 0),
+            "hit_pct": float(hit or 0) * 100,
+            "avg_excess_pp": float(excess or 0),
+        }
+        for direction, horizon, count, hit, excess in grouped
+    }
+    return {"days": days, "rows": rows}
 
 
 def _load_taifex_market_positioning(
@@ -7331,370 +7307,138 @@ def _load_taifex_market_positioning(
     }
 
 
-def _load_taifex_market_option_positioning(
-    cursor, as_of_date: dt.date | None, started_at: dt.datetime | None,
-) -> dict[str, Any]:
-    """Load index-option calls/puts as aggregate, non-directional context."""
+def _arrow_pct(value: float | None, digits: int = 2) -> str:
+    if value is None:
+        return "—"
+    if abs(value) < 0.005:
+        return "－ 0.00%"
+    return f"{'▲' if value > 0 else '▼'} {abs(value):.{digits}f}%"
 
-    expected_keys = {
-        (TAIFEX_OPTION_POSITION_CONTRACT, call_put, institution_type)
-        for call_put in TAIFEX_OPTION_POSITION_CALL_PUTS
-        for institution_type in TAIFEX_POSITION_INSTITUTIONS
-    }
-    if not as_of_date or not started_at:
-        return {
-            "as_of_date": None, "source_date": None, "expected_count": len(expected_keys),
-            "positions": {}, "five_session_changes": {}, "common_date_count": 0,
-        }
-    updated_at_cutoff = _source_updated_at_cutoff_utc(started_at)
-    cursor.execute(
-        MARKET_CONTEXT_ASOF_CTE + """
-        SELECT entity_id, effective_date, metric_value, value_text
-        FROM market_context_snapshot
-        WHERE source_key=%s AND event_type=%s AND entity_type='macro'
-          AND quality_status='ok' AND effective_date<=%s
-        ORDER BY effective_date DESC, entity_id
-        LIMIT 42
-        """,
-        (
-            updated_at_cutoff, updated_at_cutoff, updated_at_cutoff, updated_at_cutoff,
-            TAIFEX_OPTION_POSITION_SOURCE_KEY, TAIFEX_POSITION_EVENT_TYPE,
-            as_of_date,
-        ),
-    )
-    histories: dict[tuple[str, str, str], list[dict[str, Any]]] = {
-        key: [] for key in expected_keys
-    }
-    for entity_id, effective_date, metric_value, value_text in cursor.fetchall():
-        try:
-            detail = json.loads(value_text or "{}")
-        except (TypeError, ValueError):
+
+def _daily_index_line(run: dict[str, Any], as_of_date: dt.date | None) -> str:
+    """One line with the official index close and daily change per market."""
+
+    moves = run.get("market_index_moves") or {}
+    parts: list[str] = []
+    for market, label in (("上市", "加權"), ("上櫃", "櫃買")):
+        move = moves.get(market) or {}
+        close = _number(move.get("close"))
+        change = _number(move.get("change_pct"))
+        move_date = _date_only(move.get("date"))
+        if close is None or change is None or (as_of_date and move_date != as_of_date):
             continue
-        key = (
-            str(detail.get("contract_code") or ""),
-            str(detail.get("call_put") or "").upper(),
-            str(detail.get("institution_type") or ""),
-        )
-        if key not in histories:
-            continue
-        histories[key].append(
-            {
-                "effective_date": _date_only(effective_date),
-                "net_open_interest_lots": _number(metric_value),
-            }
-        )
-
-    latest_dates = [history[0]["effective_date"] for history in histories.values() if history]
-    source_date = max(latest_dates) if latest_dates else None
-    positions: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for key, history in histories.items():
-        if history and history[0]["effective_date"] == source_date:
-            positions[key] = history[0]
-
-    common_dates: set[dt.date] | None = None
-    for history in histories.values():
-        dates = {item["effective_date"] for item in history if item["effective_date"]}
-        common_dates = dates if common_dates is None else common_dates & dates
-    ordered_common_dates = sorted(common_dates or set(), reverse=True)
-    five_session_changes: dict[tuple[str, str, str], float] = {}
-    if as_of_date in ordered_common_dates and len(ordered_common_dates) >= 6:
-        baseline_date = ordered_common_dates[5]
-        for key, history in histories.items():
-            by_date = {item["effective_date"]: item for item in history}
-            current = by_date.get(as_of_date)
-            baseline = by_date.get(baseline_date)
-            if (
-                current and baseline
-                and current["net_open_interest_lots"] is not None
-                and baseline["net_open_interest_lots"] is not None
-            ):
-                five_session_changes[key] = (
-                    current["net_open_interest_lots"]
-                    - baseline["net_open_interest_lots"]
-                )
-    return {
-        "as_of_date": as_of_date,
-        "source_date": source_date,
-        "expected_count": len(expected_keys),
-        "positions": positions,
-        "five_session_changes": five_session_changes,
-        "common_date_count": len(ordered_common_dates),
-    }
+        parts.append(f"{label} **{close:,.2f}** {_arrow_pct(change)}")
+    return "　".join(parts)
 
 
-def _load_taifex_large_trader_context(
-    cursor, as_of_date: dt.date | None, started_at: dt.datetime | None,
-) -> dict[str, Any]:
-    """Load the all-contract TX row as PIT market concentration context."""
+def _daily_breadth_lines(run: dict[str, Any]) -> list[str]:
+    """Advancers / decliners / unchanged per market, plus an overall read."""
 
-    if not as_of_date or not started_at:
-        return {"as_of_date": None, "source_date": None, "quality_status": "unknown"}
-    updated_at_cutoff = _source_updated_at_cutoff_utc(started_at)
-    cursor.execute(
-        MARKET_CONTEXT_ASOF_CTE + """
-        SELECT effective_date, quality_status, value_text
-        FROM market_context_snapshot
-        WHERE source_key=%s AND event_type=%s AND entity_type='macro'
-          AND entity_id=%s AND effective_date<=%s
-        ORDER BY effective_date DESC
-        LIMIT 6
-        """,
-        (
-            updated_at_cutoff, updated_at_cutoff, updated_at_cutoff, updated_at_cutoff,
-            TAIFEX_LARGE_TRADER_SOURCE_KEY, TAIFEX_LARGE_TRADER_EVENT_TYPE,
-            "TX::999912::0", as_of_date,
-        ),
-    )
-    observations: list[dict[str, Any]] = []
-    for effective_date, quality_status, value_text in cursor.fetchall():
-        try:
-            detail = json.loads(value_text or "{}")
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(detail, dict):
-            continue
-        observations.append(
-            {
-                "effective_date": _date_only(effective_date),
-                "quality_status": str(quality_status or "unknown"),
-                "top5_buy_lots": _number(detail.get("top5_buy_lots")),
-                "top5_sell_lots": _number(detail.get("top5_sell_lots")),
-                "top10_buy_lots": _number(detail.get("top10_buy_lots")),
-                "top10_sell_lots": _number(detail.get("top10_sell_lots")),
-                "market_open_interest_lots": _number(
-                    detail.get("market_open_interest_lots")
-                ),
-            }
-        )
-    current = next(
-        (item for item in observations if item["effective_date"] == as_of_date),
-        None,
-    )
-    latest = observations[0] if observations else None
-    return {
-        "as_of_date": as_of_date,
-        "source_date": latest.get("effective_date") if latest else None,
-        "quality_status": current.get("quality_status") if current else (
-            latest.get("quality_status") if latest else "missing"
-        ),
-        "values": current,
-        "observed_session_count": len(
-            {item["effective_date"] for item in observations if item["effective_date"]}
-        ),
-    }
-
-
-def _format_tpex_daytrade_market_context(
-    context: dict[str, Any], as_of_date: dt.date | None,
-) -> str:
-    scan_label = as_of_date.strftime("%Y/%m/%d") if as_of_date else "未提供"
-    source_date = _date_only(context.get("source_date"))
-    if not source_date:
-        return (
-            f"上櫃市場當沖彙總截至 {scan_label} 尚無可用列；缺資料不代表零當沖量。"
-            "本來源只有 TPEx 市場彙總，不代表上市市場或個股。"
-        )
-    if context.get("quality_status") != "ok":
-        return (
-            f"上櫃市場當沖彙總最新列 {source_date:%Y/%m/%d} 未通過品質檢查 "
-            f"({context.get('quality_status') or 'unknown'})；不引用數值。"
-        )
-    if source_date != as_of_date:
-        return (
-            f"上櫃市場當沖彙總最新有效日 {source_date:%Y/%m/%d}，掃描日 {scan_label}；"
-            "日期未對齊，本次不沿用舊值。缺資料不視為零當沖量。"
-        )
-    values = context.get("values") or {}
-    required = (
-        "daytrade_volume_shares", "daytrade_volume_share_pct",
-        "daytrade_buy_value_twd", "daytrade_buy_value_share_pct",
-        "daytrade_sell_value_twd", "daytrade_sell_value_share_pct",
-    )
-    if any(values.get(key) is None for key in required):
-        return "上櫃市場當沖彙總日期已對齊，但欄位不完整；本次不引用數值。"
-    lines = [
-        f"TPEx {source_date:%Y/%m/%d}｜當沖 {values['daytrade_volume_shares']:,.0f} 股 "
-        f"({values['daytrade_volume_share_pct']:.2f}% 市場量)｜"
-        f"買 NT${values['daytrade_buy_value_twd']:,.0f} ({values['daytrade_buy_value_share_pct']:.2f}%)｜"
-        f"賣 NT${values['daytrade_sell_value_twd']:,.0f} ({values['daytrade_sell_value_share_pct']:.2f}%)"
-    ]
-    change = context.get("five_session_change_pp")
-    end_date = _date_only(context.get("five_session_change_end_date"))
-    start_date = _date_only(context.get("five_session_change_start_date"))
-    if change is not None and end_date and start_date:
-        lines.append(
-            f"5 交易日當沖量占比變化 {float(change):+.2f} 個百分點 "
-            f"({start_date:%m/%d} 至 {end_date:%m/%d}；區間終點落後掃描日 2 個交易日)"
-        )
-    else:
-        lines.append("5 交易日比較尚未累積 8 個完整上櫃交易日資料。")
-    lines.append(
-        "上櫃市場彙總，只作交易活躍度背景，不代表上市市場或個股方向，也不計入個股分數；"
-        "當日值可能至 T+2 回修，且未保存歷史版本。"
-    )
-    return "\n".join(lines)
-
-
-def _format_daily_market_total_return_context(
-    context_by_market: dict[str, dict[str, Any]], as_of_date: dt.date | None,
-) -> str:
-    scan_label = as_of_date.strftime("%Y/%m/%d") if as_of_date else "未提供"
+    markets = (run.get("market_breadth_context") or {}).get("markets") or {}
     lines: list[str] = []
+    total_up = total_down = 0
     for market in ("上市", "上櫃"):
-        context = context_by_market.get(market) or {}
-        source_date = _date_only(context.get("source_date"))
-        index_code = str(context.get("index_code") or "官方報酬指數")
-        if not source_date:
-            lines.append(f"{market} {index_code}：尚無可用資料日；不推定市場報酬為零。")
+        breadth = markets.get(market) or {}
+        if not breadth.get("quote_count"):
             continue
-        if context.get("quality_status") != "ok":
-            lines.append(
-                f"{market} {index_code}：最新列 {source_date:%Y/%m/%d} 品質狀態 "
-                f"{context.get('quality_status') or 'unknown'}；不引用數值。"
-            )
+        up = int(breadth.get("advancers") or 0)
+        down = int(breadth.get("decliners") or 0)
+        flat = int(breadth.get("unchanged") or 0)
+        total = up + down + flat
+        if total <= 0:
             continue
-        if source_date != as_of_date:
-            lines.append(
-                f"{market} {index_code}：最新有效日 {source_date:%Y/%m/%d}，"
-                f"掃描日 {scan_label}；未對齊，不沿用舊值。"
-            )
-            continue
+        total_up += up
+        total_down += down
+        lines.append(
+            f"{market}　▲ **{up:,}**（{up / total * 100:.0f}%）　"
+            f"▼ **{down:,}**（{down / total * 100:.0f}%）　＝ {flat:,}"
+        )
+    if not lines:
+        return ["漲跌家數：尚未取得同日行情"]
+    decided = total_up + total_down
+    share = total_up / decided if decided else 0.5
+    if share >= 0.65:
+        tone = "多數個股上漲"
+    elif share <= 0.35:
+        tone = "多數個股下跌"
+    else:
+        tone = "漲跌互見"
+    return [f"**漲跌家數｜{tone}**", *lines]
 
-        change = _number(context.get("five_session_return_pct"))
-        start_date = _date_only(context.get("window_start_date"))
-        end_date = _date_only(context.get("window_end_date"))
-        if change is not None and start_date and end_date:
-            lines.append(
-                f"{market} {index_code} 近 5 交易日總報酬 {change:+.2f}% "
-                f"({start_date:%m/%d} 至 {end_date:%m/%d})"
-            )
-        else:
-            count = int(context.get("complete_session_count") or 0)
-            lines.append(
-                f"{market} {index_code} 資料日已對齊；有效指數點 {count}/6，"
-                "尚不計算五日報酬。"
-            )
 
+def _daily_futures_flow_line(run: dict[str, Any], as_of_date: dt.date | None) -> str:
+    """Foreign-investor index-futures net open interest, only when same-day."""
+
+    context = run.get("taifex_market_positioning") or {}
+    source_date = _date_only(context.get("source_date"))
+    if not source_date or (as_of_date and source_date != as_of_date):
+        return ""
+    positions = context.get("positions") or {}
+    changes = context.get("five_session_changes") or {}
+    parts: list[str] = []
+    for contract_code, label in (("臺股期貨", "臺股期貨"), ("櫃買指數期貨", "櫃買期貨")):
+        key = (contract_code, "外資及陸資")
+        position = positions.get(key) or {}
+        lots = _number(position.get("net_open_interest_lots"))
+        if lots is None:
+            continue
+        text = f"{label}淨未平倉 **{lots:+,.0f} 口**"
+        change = _number(changes.get(key))
+        if change is not None:
+            text += f"（5日 {change:+,.0f}）"
+        parts.append(text)
+    return "外資 " + "　".join(parts) if parts else ""
+
+
+def _daily_scoreboard_text(run: dict[str, Any]) -> str:
+    """Compact backtest record; empty when no settled outcomes exist."""
+
+    board = run.get("signal_scoreboard") or {}
+    rows = board.get("rows") or {}
+    if not rows:
+        return ""
+    lines = ["相對大盤、方向調整後，次日收盤進場："]
+    for direction in ("偏多", "偏空"):
+        pieces = []
+        for horizon in (1, 5):
+            row = rows.get((direction, horizon))
+            if not row or not row.get("n"):
+                continue
+            pieces.append(
+                f"{horizon}日 勝大盤 {row['hit_pct']:.0f}%、平均超額 "
+                f"{row['avg_excess_pp']:+.1f}pp（{row['n']:,}筆）"
+            )
+        if pieces:
+            lines.append(f"**{direction}**　" + "｜".join(pieces))
+    days = int(board.get("days") or 0)
     lines.append(
-        "只作市場背景、不加入個股分數；TWSE 資料集說明配股配息再投資，"
-        "TPEx 資料依官方『報酬指數』欄位呈現。來源由自然批次累積，缺值不補零。"
-    )
-    lines.append(
-        "來源：[TWSE 11871](https://data.gov.tw/dataset/11871)｜"
-        "[TPEx 20219](https://data.gov.tw/dataset/20219)"
+        f"目前僅 {days} 個訊號日，樣本偏少，尚不能證明有效。"
+        if days < 60 else f"累計 {days} 個訊號日。"
     )
     return "\n".join(lines)
 
 
-def _format_taifex_market_positioning(
-    context: dict[str, Any], as_of_date: dt.date | None,
-    option_context: dict[str, Any] | None = None,
-    large_trader_context: dict[str, Any] | None = None,
-) -> str:
-    scan_label = as_of_date.strftime("%Y/%m/%d") if as_of_date else "未提供"
-    lines: list[str] = []
+def _daily_data_caveat(run: dict[str, Any]) -> str:
+    """At most one plain-language line, only when coverage affects signals."""
 
-    futures_date = _date_only(context.get("source_date"))
-    if not futures_date:
-        lines.append("指數期貨：尚未收集；缺資料不視為零部位。")
-    elif futures_date != as_of_date:
-        lines.append(
-            f"指數期貨：最新資料日 {futures_date:%Y/%m/%d}，掃描日 {scan_label}，"
-            "日期未對齊，不沿用舊值。"
-        )
-    else:
-        positions = context.get("positions") or {}
-        changes = context.get("five_session_changes") or {}
-        lines.append(
-            f"指數期貨 {futures_date:%Y/%m/%d}｜{len(positions)}/"
-            f"{int(context.get('expected_count') or 0)} 組"
-        )
-        for contract_code, market_label in TAIFEX_POSITION_CONTRACTS.items():
-            components = []
-            for institution_type in TAIFEX_POSITION_INSTITUTIONS:
-                key = (contract_code, institution_type)
-                position = positions.get(key)
-                if not position or position.get("net_open_interest_lots") is None:
-                    continue
-                value = float(position["net_open_interest_lots"])
-                text = f"{institution_type} {value:+,.0f}口"
-                change = changes.get(key)
-                if change is not None:
-                    text += f"（5日 {float(change):+,.0f}）"
-                components.append(text)
-            if components:
-                lines.append(f"{market_label}：" + "；".join(components))
-
-    option_context = option_context or {}
-    option_date = _date_only(option_context.get("source_date"))
-    if not option_date:
-        lines.append("臺指選擇權：尚未收集；缺資料不視為零部位。")
-    elif option_date != as_of_date:
-        lines.append(
-            f"臺指選擇權：最新資料日 {option_date:%Y/%m/%d}，掃描日 {scan_label}，"
-            "日期未對齊，不沿用舊值。"
-        )
-    else:
-        positions = option_context.get("positions") or {}
-        changes = option_context.get("five_session_changes") or {}
-        lines.append(
-            f"臺指選擇權 {option_date:%Y/%m/%d}｜{len(positions)}/"
-            f"{int(option_context.get('expected_count') or 0)} 組"
-        )
-        for call_put in TAIFEX_OPTION_POSITION_CALL_PUTS:
-            components = []
-            for institution_type in TAIFEX_POSITION_INSTITUTIONS:
-                key = (TAIFEX_OPTION_POSITION_CONTRACT, call_put, institution_type)
-                position = positions.get(key)
-                if not position or position.get("net_open_interest_lots") is None:
-                    continue
-                value = float(position["net_open_interest_lots"])
-                text = f"{institution_type} {value:+,.0f}口"
-                change = changes.get(key)
-                if change is not None:
-                    text += f"（5日 {float(change):+,.0f}）"
-                components.append(text)
-            if components:
-                lines.append(f"{call_put}：" + "；".join(components))
-
-    large_trader_context = large_trader_context or {}
-    large_trader_date = _date_only(large_trader_context.get("source_date"))
-    large_values = large_trader_context.get("values") or {}
-    if not large_trader_date:
-        lines.append("期貨大額交易人：尚未收集；缺資料不視為零部位。")
-    elif large_trader_date != as_of_date:
-        lines.append(
-            f"期貨大額交易人：最新資料日 {large_trader_date:%Y/%m/%d}，掃描日 {scan_label}，"
-            "日期未對齊，不沿用舊值。"
-        )
-    elif large_trader_context.get("quality_status") != "ok":
-        lines.append("期貨大額交易人：有效日已對齊但列未通過品質檢查，不引用數值。")
-    elif any(
-        large_values.get(key) is None
-        for key in (
-            "top5_buy_lots", "top5_sell_lots", "top10_buy_lots",
-            "top10_sell_lots", "market_open_interest_lots",
-        )
-    ):
-        lines.append("期貨大額交易人：有效日已對齊但欄位不完整，不引用數值。")
-    else:
-        lines.append(
-            f"期貨大額交易人 {large_trader_date:%Y/%m/%d}｜TX 所有契約（原始類別碼 0）｜"
-            f"前5買 {large_values['top5_buy_lots']:,.0f}、前5賣 {large_values['top5_sell_lots']:,.0f}；"
-            f"前10買 {large_values['top10_buy_lots']:,.0f}、前10賣 {large_values['top10_sell_lots']:,.0f}；"
-            f"市場總未平倉 {large_values['market_open_interest_lots']:,.0f} 口"
-        )
-
-    lines.extend(
-        [
-            "三類法人是多機構彙總；選擇權多腿策略不等於單純看多/看空。大額交易人買/賣兩側分開排名，不能相減成淨部位。僅作市場背景，不計個股方向分數。",
-            "來源：[TAIFEX 官方 OpenAPI](https://openapi.taifex.com.tw/)｜"
-            "[期貨法人欄位](https://www.taifex.com.tw/cht/3/futContractsDate)｜"
-            "[選擇權買權/賣權統計](https://www.taifex.com.tw/cht/3/callsAndPutsDate)｜"
-            "[大額交易人開放資料 11337](https://data.gov.tw/dataset/11337)",
-        ]
-    )
-    return "\n".join(lines)
+    notes: list[str] = []
+    coverage = run.get("market_coverage_by_market") or {}
+    for market in ("上市", "上櫃"):
+        values = coverage.get(market) or {}
+        price_pct = _number(values.get("price_coverage_pct"))
+        flow_pct = _number(values.get("flow_coverage_pct"))
+        if price_pct is not None and price_pct < 95:
+            notes.append(f"{market}收盤價僅涵蓋 {price_pct:.0f}% 個股")
+        if flow_pct is not None and flow_pct < 90:
+            notes.append(f"{market}法人買賣超僅涵蓋 {flow_pct:.0f}% 個股")
+    status = str(run.get("source_status") or "unknown")
+    if status == "unknown":
+        return "資料狀態未知，本次名單暫不可作為判讀依據。"
+    if not notes:
+        if status != "fresh":
+            return "部分來源有缺列或日期待核；缺資料的個股會略過該項判讀，其餘照常判讀。"
+        return ""
+    return "；".join(notes) + "。缺資料的個股會略過該項判讀。"
 
 
 def _format_daily_embeds(
@@ -7702,6 +7446,9 @@ def _format_daily_embeds(
 ) -> list[dict[str, Any]]:
     as_of_date = _date_only(run.get("as_of_date"))
     as_of = as_of_date.strftime("%Y/%m/%d") if as_of_date else "無新收盤資料"
+    weekday = (
+        "一二三四五六日"[as_of_date.weekday()] if as_of_date else ""
+    )
     parsed: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for row in candidates:
         try:
@@ -7712,318 +7459,52 @@ def _format_daily_embeds(
     bullish = [(row, detail) for row, detail in parsed if detail.get("direction") == "偏多"]
     bearish = [(row, detail) for row, detail in parsed if detail.get("direction") == "偏空"]
     mixed = [(row, detail) for row, detail in parsed if detail.get("direction") == "訊號分歧"]
-    source_status = str(run.get("source_status", "unknown"))
-    source_status_label = {
-        "fresh": "達最低資料檢查（仍非 100% 覆蓋）",
-        "partial": "已依可用資料判讀；部分來源缺列或日期待核",
-        "unknown": "資料狀態未知，暫不可判讀",
-    }.get(source_status, "狀態未知")
     shown_bullish = bullish[:min(DAILY_DIGEST_LIMIT, 6)]
-    cautions = (bearish + mixed)[:2]
-    remainder = max(0, len(bullish) - len(shown_bullish)) + max(0, len(bearish) + len(mixed) - len(cautions))
+    cautions = (bearish + mixed)[:4]
     universe_count = int(run.get("universe_count") or 0)
-    price_count = int(run.get("price_count") or 0)
-    flow_count = int(run.get("flow_count") or 0)
-    price_coverage = price_count / universe_count * 100 if universe_count else 0
-    flow_coverage = flow_count / universe_count * 100 if universe_count else 0
-    market_coverage = run.get("market_coverage_by_market") or {}
-    market_coverage_lines = []
-    for market in ("上市", "上櫃"):
-        values = market_coverage.get(market)
-        if not values:
-            continue
-        market_universe = int(values.get("universe_count") or 0)
-        market_price = int(values.get("price_count") or 0)
-        price_row_codes = values.get("price_row_code_count")
-        invalid_close_codes = values.get("price_invalid_close_code_count")
-        no_trade_codes = values.get("price_no_trade_code_count")
-        market_flow = int(values.get("flow_count") or 0)
-        traded_without_flow = values.get("traded_without_flow_count")
-        market_price_pct = float(values.get("price_coverage_pct") or 0)
-        market_flow_pct = float(values.get("flow_coverage_pct") or 0)
-        market_coverage_lines.append(
-            f"{market}：收盤行情 {market_price:,}/{market_universe:,} 檔 "
-            f"({market_price_pct:.1f}%)｜同日可判讀法人 {market_flow:,}/"
-            f"{market_universe:,} 檔 ({market_flow_pct:.1f}%)"
-            + (
-                f"｜該日行情列 {int(price_row_codes):,} 檔、無效收盤 "
-                f"{int(invalid_close_codes):,} 檔"
-                if price_row_codes is not None and invalid_close_codes is not None
-                else (
-                    "｜歷史快照未留存日行情列/無效收盤分項"
-                    if price_row_codes is None else ""
-                )
-            )
-            + (
-                f"、已知零成交 {int(no_trade_codes):,} 檔"
-                if no_trade_codes is not None else ""
-            )
-            + (
-                f"｜有成交但法人同日缺列 {int(traded_without_flow):,} 檔（未知）"
-                if traded_without_flow is not None and values.get("flow_readiness")
-                else (
-                    "｜舊快照當時未讀入上市法人表，未保存逐檔缺列數"
-                    if (values.get("flow_readiness") or {}).get("status") == "source_not_authorized"
-                    else "｜歷史快照未留存同日法人來源缺列口徑"
-                )
-            )
-        )
-    coverage_value = (
-        "\n".join(market_coverage_lines)
-        if market_coverage_lines
-        else (
-            f"全市場收盤有效資料 {price_count:,}/{universe_count:,} 檔 "
-            f"({price_coverage:.1f}%)\n"
-            f"全市場同日可判讀法人 {flow_count:,}/{universe_count:,} 檔 "
-            f"({flow_coverage:.1f}%)"
-        )
-    )
-    coverage_value += (
-        "\n缺少證券列保持未知，不補成零；來源狀態的覆蓋門檻分上市/上櫃檢查。"
-    )
-    benchmark_alignment = run.get("benchmark_alignment_by_market")
-    benchmark_lines = []
-    if isinstance(benchmark_alignment, dict):
-        for market, index_code in (("上市", "TAIEX"), ("上櫃", "TPEX")):
-            values = benchmark_alignment.get(market)
-            if not isinstance(values, dict):
-                continue
-            latest_date = _escape_discord_markdown(
-                values.get("latest_effective_date"), 16
-            )
-            latest_valid_date = _escape_discord_markdown(
-                values.get("latest_valid_effective_date"), 16
-            )
-            aligned = values.get("aligned_to_scan_date")
-            window_count = values.get("window_point_count")
-            valid_count = values.get("window_valid_point_count")
-            if not latest_date:
-                detail = "有效資料日未知"
-            else:
-                detail = f"資料列日 {latest_date}"
-                if latest_valid_date and latest_valid_date != latest_date:
-                    detail += f"；有效值截至 {latest_valid_date}"
-                if aligned is False:
-                    detail += f"；未與掃描日 {as_of} 對齊"
-                elif window_count is not None and valid_count is not None:
-                    detail += f"；近六點有效 {int(valid_count)}/6"
-            benchmark_lines.append(f"{market} {index_code}：{detail}")
-    if benchmark_lines:
-        coverage_value += "\n官方市場基準：" + "；".join(benchmark_lines)
-    elif "benchmark_alignment_by_market" in run:
-        coverage_value += "\n官方市場基準日期未取得；不能推定與掃描日對齊。"
-    else:
-        coverage_value += "\n歷史快照未保存官方市場基準有效日。"
-    summary = {
-        "title": (
-            f"📡 台股收盤訊號｜{as_of}｜部分來源待核"
-            if source_status != "fresh"
-            else f"📡 台股收盤訊號｜{as_of}"
-        ),
-        "description": (
-            f"本輪掃描 {universe_count:,} 檔，{len(parsed)} 檔達到觀察門檻。"
-            "個股卡片列出支持證據、反向風險、相對大盤表現與下一步觀察條件。"
-        ),
-        "color": 0x34495E,
-        "fields": [
-            {
-                "name": "上市/上櫃資料覆蓋",
-                "value": (
-                    f"{coverage_value}\n來源狀態：{source_status_label}"
-                ),
-                "inline": False,
-            },
-            {
-                "name": "市場廣度背景（官方個股漲跌欄；不計入分數）",
-                "value": "",
-                "inline": False,
-            },
-            {
-                "name": "達觀察門檻的名單分布",
-                "value": (
-                    f"🟢 偏多 **{len(bullish)}**　🔴 偏空 **{len(bearish)}**　"
-                    f"🟡 分歧 **{len(mixed)}**"
-                ),
-                "inline": False,
-            },
-            {
-                "name": "怎麼讀",
-                "value": (
-                    "至少 3 個有效資料家族有方向才入列；多空依家族票數差判定，平手列為分歧。"
-                    "名單分布只計入達門檻候選，不是全市場漲跌家數；未上榜不代表看空。"
-                ),
-                "inline": False,
-            },
-        ],
-        "footer": {
-            "text": (
-                f"資料截至 {as_of}｜顯示偏多前 {len(shown_bullish)} 檔與風險前 "
-                f"{len(cautions)} 檔；另 {remainder} 檔未逐張列出"
-                if remainder else f"資料截至 {as_of}｜名單已完整顯示"
-            )
-        },
-    }
-    flow_embed = {
-        "title": "法人與券商分點訊號判讀",
-        "color": 0x34495E,
-        "description": "使用當時已收的資料，完整 1／3／5 交易日視窗各自判斷；缺資料略過，不補成零。",
-        "fields": [{
-            "name": "法人來源說明",
-            "value": "\n".join(format_flow_readiness(
-                market, (market_coverage.get(market) or {}).get("flow_readiness") or {},
-                int((market_coverage.get(market) or {}).get("universe_count") or 0),
-            ) for market in ("上市", "上櫃")),
-            "inline": False,
-        }],
-    }
-    family_counts = run.get("family_trigger_counts")
-    if isinstance(family_counts, dict):
-        labels = {"price": "價格", "volume": "量能", "institutions": "法人",
-                  "broker_branches": "分點", "profitability": "季獲利率"}
-        summary["fields"].insert(1, {
-            "name": "已判讀並達各項多空條件的股票數",
-            "value": "；".join(f"{label} {int(family_counts.get(key) or 0):,} 檔"
-                               for key, label in labels.items())
-                     + "。這是各項訊號數；多項可能屬於同一股票，合併候選另需至少 3 個方向家族。",
-            "inline": False,
-        })
-    source_issues = [
-        str(issue).replace("\n", " ").strip()
-        for issue in (run.get("source_issues") or [])
-        if str(issue).strip()
-    ]
-    if source_issues:
-        displayed_source_issues = [issue[:110] for issue in source_issues[:7]]
-        if len(source_issues) > len(displayed_source_issues):
-            displayed_source_issues.append(
-                f"…另有 {len(source_issues) - len(displayed_source_issues)} 項"
-            )
-        summary["fields"].insert(
-            1,
-            {
-                "name": "來源批次問題／覆蓋檢查",
-                "value": "\n".join(displayed_source_issues)[:1000],
-                "inline": False,
-            },
-        )
-    breadth_markets = (run.get("market_breadth_context") or {}).get("markets") or {}
-    breadth_lines = []
-    for market_label in ("上市", "上櫃"):
-        breadth = breadth_markets.get(market_label)
-        if not breadth or not breadth.get("quote_count"):
-            universe_count = int((breadth or {}).get("universe_count") or 0)
-            denominator = (
-                f"接受 0/{universe_count:,} 檔目前主檔證券"
-                if universe_count else "目前市場主檔分母未提供"
-            )
-            breadth_lines.append(
-                f"{market_label}：沒有與 {as_of} 同日的已接受開放行情（缺資料，不當作零漲跌）；"
-                f"{denominator}。"
-            )
-            continue
-        accepted_count = int(breadth.get("accepted_count") or 0)
-        universe_count = int(breadth.get("universe_count") or 0)
-        accepted_ratio = (
-            f"{accepted_count:,}/{universe_count:,} 檔目前主檔證券"
-            f"（{accepted_count / universe_count * 100:.1f}%）"
-            if universe_count else f"{accepted_count:,} 檔已接受；主檔分母未提供"
-        )
-        breadth_lines.append(
-            f"{market_label} CFI ES* 行情代碼 {breadth['quote_count']:,}｜"
-            f"接受/現行主檔 {accepted_ratio}｜隔離 {breadth['quarantined_count']:,}｜"
-            f"上漲 {breadth['advancers']:,}／下跌 {breadth['decliners']:,}／"
-            f"平盤 {breadth['unchanged']:,}｜漲跌值未分類 {breadth['unclassified']:,}"
-        )
-    breadth_lines.extend(
-        [
-            "母體為當日行情與目前證券主檔的 CFI ES* 交集，並非 TWSE『股票』彙總口徑；只作市場背景。",
-            "接受行情代碼/目前主檔數只顯示列報範圍；差額可能含停牌、無交易或採集缺列，未逐一辨識，不補成零成交或持平。",
-            "來源：[TWSE 開放個股日成交資訊](https://data.gov.tw/dataset/11549)｜"
-            "[TPEx 開放上櫃行情](https://data.gov.tw/dataset/11370)",
-        ]
-    )
-    breadth_field = next(
-        (
-            field for field in summary["fields"]
-            if field.get("name") == "市場廣度背景（官方個股漲跌欄；不計入分數）"
-        ),
-        None,
-    )
-    if breadth_field is not None:
-        breadth_field["value"] = "\n".join(breadth_lines)
-    taifex_context = run.get("taifex_market_positioning") or {}
-    summary["fields"].insert(
-        2,
-        {
-            "name": "期交所法人期貨／選擇權部位（市場背景；不計分）",
-            "value": _format_taifex_market_positioning(
-                taifex_context, as_of_date,
-                run.get("taifex_market_option_positioning") or {},
-                run.get("taifex_large_trader_context") or {},
-            ),
-            "inline": False,
-        },
-    )
-    summary["fields"].insert(
-        3,
-        {
-            "name": "上櫃市場現股當沖彙總（官方市場背景；不計分）",
-            "value": _format_tpex_daytrade_market_context(
-                run.get("tpex_daytrade_market_context") or {}, as_of_date
-            ),
-            "inline": False,
-        },
-    )
-    summary["fields"].insert(
-        4,
-        {
-            "name": "上市/上櫃市場總報酬（官方背景；不計分）",
-            "value": _format_daily_market_total_return_context(
-                run.get("market_total_return_context") or {}, as_of_date
-            ),
-            "inline": False,
-        },
-    )
-    if not parsed:
-        if source_status == "fresh":
-            summary["description"] = (
-                "本次沒有股票同時具備至少 3 個有方向的資料家族；暫不列候選。"
-                "未達門檻不等於偏空。"
-            )
-        else:
-            summary["description"] = (
-                "已依本輪有效資料判讀，沒有股票同時達到至少 3 個有方向的資料家族。"
-                "各缺列只略過對應股票／來源，詳見覆蓋與具體缺項；"
-                "未達候選門檻不等於沒有法人交易，也不代表偏空。"
-            )
-    elif not bullish:
-        summary["description"] = (
-            "本次沒有符合條件的偏多候選；以下列出偏空風險或方向分歧，僅供觀察。"
-        )
-    if source_status != "fresh" and parsed:
-        summary["description"] += "\n部分來源缺列或日期待核，已逐項列示；其餘有效訊號照常判讀。"
 
-    background_field_names = {
-        "市場廣度背景（官方個股漲跌欄；不計入分數）",
-        "期交所法人期貨／選擇權部位（市場背景；不計分）",
-        "上櫃市場現股當沖彙總（官方市場背景；不計分）",
-        "上市/上櫃市場總報酬（官方背景；不計分）",
-    }
-    background_fields = [
-        field for field in summary["fields"]
-        if field.get("name") in background_field_names
-    ]
-    summary["fields"] = [
-        field for field in summary["fields"]
-        if field.get("name") not in background_field_names
-    ]
-    background_embed = {
-        "title": "📈 市場環境背景（不計個股分數）",
+    description_lines: list[str] = []
+    index_line = _daily_index_line(run, as_of_date)
+    if index_line:
+        description_lines.append(index_line)
+    description_lines.extend(_daily_breadth_lines(run))
+    if not parsed:
+        conclusion = "**今日結論：沒有股票達觀察門檻**（需 3 個以上方向一致的資料面向）；未入列不代表偏空。"
+    elif not bullish:
+        conclusion = (
+            f"**今日結論：沒有偏多候選**；偏空風險 {len(bearish)} 檔、"
+            f"方向分歧 {len(mixed)} 檔，列於下方供觀察。"
+        )
+    else:
+        conclusion = (
+            f"**今日結論：偏多 {len(bullish)} 檔**；偏空風險 {len(bearish)} 檔、"
+            f"方向分歧 {len(mixed)} 檔。"
+        )
+    description_lines.append("")
+    description_lines.append(conclusion)
+
+    fields: list[dict[str, Any]] = []
+    flow_line = _daily_futures_flow_line(run, as_of_date)
+    if flow_line:
+        fields.append({"name": "法人期貨", "value": flow_line, "inline": False})
+    scoreboard = _daily_scoreboard_text(run)
+    if scoreboard:
+        fields.append({"name": "訊號成績單（回測）", "value": scoreboard, "inline": False})
+    caveat = _daily_data_caveat(run)
+    if caveat:
+        fields.append({"name": "⚠️ 資料提醒", "value": caveat, "inline": False})
+
+    for field in fields:
+        field["value"] = str(field["value"])[:1024]
+    summary = {
+        "title": f"市場總覽｜{as_of}" + (f"（{weekday}）" if weekday else ""),
+        "description": "\n".join(description_lines)[:4000],
         "color": 0x34495E,
-        "description": "官方市場廣度、期貨與當沖只作背景；不形成個股多空票。",
-        "fields": background_fields,
+        "fields": fields,
+        "footer": {"text": f"掃描 {universe_count:,} 檔｜資料截至 {as_of}"},
     }
-    embeds = [summary, flow_embed, background_embed]
+
+    embeds = [summary]
     displayed_bullish = 0
     displayed_cautions = 0
     for row, detail in [*shown_bullish, *cautions]:
@@ -8042,8 +7523,9 @@ def _format_daily_embeds(
         - displayed_bullish - displayed_cautions,
     )
     summary["footer"]["text"] = (
-        f"資料截至 {as_of}｜本則顯示偏多 {displayed_bullish} 檔、風險/分歧 {displayed_cautions} 檔"
-        + (f"｜另 {omitted} 檔未逐張列出" if omitted else "｜符合門檻名單已顯示")
+        f"掃描 {universe_count:,} 檔｜資料截至 {as_of}｜顯示偏多 {displayed_bullish} 檔、"
+        f"風險/分歧 {displayed_cautions} 檔"
+        + (f"｜另 {omitted} 檔未逐張列出" if omitted else "")
     )
     return embeds
 
@@ -8122,55 +7604,6 @@ def _format_forecast_source_value(value: Any) -> str:
     if any(part is None for part in formatted):
         return raw
     return " 至 ".join(str(part) for part in formatted)
-
-
-def _company_event_ingestion_note(detail: dict[str, Any]) -> str:
-    """Show late source-record ingestion without mixing UTC and Taipei timestamps."""
-    raw_event_time = detail.get("event_time")
-    raw_created_at = detail.get("source_created_at_utc")
-    if not raw_event_time or not raw_created_at:
-        return ""
-    try:
-        event_time = (
-            raw_event_time if isinstance(raw_event_time, dt.datetime)
-            else dt.datetime.fromisoformat(str(raw_event_time))
-        )
-        created_at = (
-            raw_created_at if isinstance(raw_created_at, dt.datetime)
-            else dt.datetime.fromisoformat(str(raw_created_at))
-        )
-    except (TypeError, ValueError):
-        return ""
-
-    taipei = dt.timezone(dt.timedelta(hours=8))
-    utc = dt.timezone.utc
-    if event_time.tzinfo is None:
-        event_time = event_time.replace(tzinfo=taipei)
-    else:
-        event_time = event_time.astimezone(taipei)
-    if created_at.tzinfo is None:
-        # source_records.created_at is written by the UTC Airflow container.
-        created_at = created_at.replace(tzinfo=utc)
-    else:
-        created_at = created_at.astimezone(utc)
-
-    delay = created_at.astimezone(taipei) - event_time
-    if delay < dt.timedelta(hours=1):
-        return ""
-    delay_minutes = int(delay.total_seconds() // 60)
-    days, remainder = divmod(delay_minutes, 24 * 60)
-    hours, minutes = divmod(remainder, 60)
-    if days:
-        delay_text = f"{days}天{hours}小時{minutes}分"
-    elif hours:
-        delay_text = f"{hours}小時{minutes}分"
-    else:
-        delay_text = f"{minutes}分"
-    received_taipei = created_at.astimezone(taipei)
-    return (
-        f"資料庫首次收錄：{received_taipei:%m/%d %H:%M} 台北時間"
-        f"（較公告晚 {delay_text}）"
-    )
 
 
 def _refresh_intraday_company_names(cursor, candidates: list[dict[str, Any]]) -> None:
@@ -8395,10 +7828,6 @@ def _format_intraday_candidate(row: dict[str, Any]) -> dict[str, Any]:
         footer_text = f"{source}｜資料出表日期：{when or '未提供'}｜官方事實觀察，不作方向訊號"
     else:
         footer_text = f"{source}｜公告時間：{when or '未提供'}"
-        if kind == "company_event":
-            ingestion_note = _company_event_ingestion_note(detail)
-            if ingestion_note:
-                footer_text += f"｜{ingestion_note}"
 
     code = _escape_discord_markdown(row.get("entity_id"), 16)
     security_name = _escape_discord_markdown(row.get("security_name"), 40)
@@ -9081,19 +8510,199 @@ def _notify_due_annual_signal_reviews(
     }
 
 
+class RetryableNotificationError(RuntimeError):
+    """Transient notification-stage problem: log it and let Airflow retry, no Discord notice."""
+
+
+class NotificationDeliveryError(RetryableNotificationError):
+    """Discord delivery failed after a successful scan (not an analysis failure)."""
+
+
+class PriceDataNotReadyError(RetryableNotificationError):
+    """Same-day prices have not fully landed yet; the digest must not claim 'no signal'."""
+
+
+def _daily_digest_dedupe_key(
+    date_key: str, batch_index: int, batch_total: int, *,
+    status: str = "ok", version: str | None = None,
+) -> str:
+    """Dedupe key for the daily message.
+
+    Validated-mode keys carry the rule version and detection status so a legacy
+    digest or an earlier 'prices not ready' notice for the same date can never
+    swallow the real validated digest (the ledger treats an existing 'sent' row as
+    delivered).
+    """
+
+    if version is None:
+        raw = f"daily|{date_key}|part|{batch_index}|of|{batch_total}"
+    else:
+        raw = f"daily|{version}|{status}|{date_key}|part|{batch_index}|of|{batch_total}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _failure_notice_is_quiet(scan_mode: str | None) -> bool:
+    """Intraday alerts are off, so their scan failures stay in the task log."""
+
+    return str(scan_mode or "") == "intraday" and not INTRADAY_PUSH_ENABLED
+
+
+def _send_capture_failure_notice(payload: dict[str, Any], notifier: DiscordNotify) -> bool:
+    """Failure notice for a failed capture, deduplicated across Airflow retries.
+
+    Without a ledger connection the same failure was announced once per task retry
+    (up to three identical messages), so open one and reuse the run-key dedupe.
+    """
+
+    if _failure_notice_is_quiet(payload.get("scan_mode")):
+        print(
+            "[market signal] intraday failure notice suppressed (log only): "
+            f"{payload.get('error_message')}"
+        )
+        return True
+    connection = cursor = engine = None
+    try:
+        if str(payload.get("run_key") or "unknown") != "unknown":
+            connection, cursor, engine = _open_connection()
+            create_schema(cursor)
+    except Exception as exc:
+        print(f"[market signal] failure notice dedupe unavailable: {type(exc).__name__}: {exc}")
+        if connection:
+            connection.close()
+        connection = cursor = None
+    try:
+        return _send_failure_notice(
+            payload, notifier,
+            cursor=cursor if connection is not None else None, connection=connection,
+        )
+    finally:
+        if connection:
+            connection.close()
+        if engine:
+            engine.dispose()
+
+
+def _build_validated_daily_digest(
+    as_of_date: dt.date | None, ledger_cursor=None, ledger_connection=None,
+) -> tuple[str, list[dict[str, Any]], str, str]:
+    """Plain-language digest limited to rules that passed validation.
+
+    With a ledger connection it also records every hit, settles matured picks and
+    appends the live tracking line (plus the weekly scorecard on Fridays), so the
+    backtest promise is always shown next to what actually happened.
+    """
+
+    registry = validated_signals.load_registry()
+    if as_of_date is None:
+        raise RuntimeError("daily digest needs an as-of date")
+    stock_conn = stock_cursor = stock_engine = None
+    tracking_embeds: list[dict[str, Any]] = []
+    try:
+        stock_conn, stock_cursor, stock_engine = _open_stock_connection()
+        rules = validated_signals.active_rules(registry)
+        rule = next(
+            (item for item in rules if item["id"] == validated_signals.BREAKOUT_RULE_ID), None
+        )
+        if rule is None:
+            detection: dict[str, Any] = {"status": "ok", "hits": [], "breadth": {}}
+            names: dict[str, str] = {}
+        else:
+            prices = validated_signals.fetch_price_history(stock_cursor, as_of_date)
+            detection = validated_signals.detect_breakouts(prices, as_of_date, rule["params"])
+            names = validated_signals.fetch_names(stock_cursor, as_of_date)
+            if ledger_cursor is not None and ledger_connection is not None:
+                tracking_embeds = _update_validated_tracking(
+                    ledger_cursor, ledger_connection, stock_cursor,
+                    rule=rule, registry=registry, as_of_date=as_of_date,
+                    detection=detection, names=names,
+                )
+    finally:
+        if stock_conn:
+            stock_conn.close()
+        if stock_engine:
+            stock_engine.dispose()
+    message, embeds = validated_signals.build_validated_digest(
+        as_of_date, registry, detection, names, tracking_embeds=tracking_embeds,
+    )
+    return message, embeds, str(detection.get("status")), str(registry.get("version"))
+
+
+def _update_validated_tracking(
+    ledger_cursor, ledger_connection, stock_cursor, *, rule, registry, as_of_date,
+    detection, names,
+) -> list[dict[str, Any]]:
+    """Record today's hits, settle matured ones, return the tracking embeds.
+
+    A tracking failure must not hide the digest, but it must not be silent either:
+    the failure is logged and shown in the digest itself.
+    """
+
+    try:
+        now = _now_taipei()
+        if detection.get("status") == "ok":
+            validated_tracking.settle_pending_picks(
+                ledger_cursor, stock_cursor, rule=rule, today=as_of_date, now=now,
+                fetch_prices=validated_signals.fetch_price_history,
+            )
+            validated_tracking.record_picks(
+                ledger_cursor, rule=rule, version=str(registry.get("version")),
+                as_of_date=as_of_date, hits=detection.get("hits") or [], names=names, now=now,
+            )
+            ledger_connection.commit()
+        summary = validated_tracking.live_summary(ledger_cursor, rule["id"])
+        embeds = [{
+            "title": "上線後成績（不是回測）",
+            "description": validated_tracking.tracking_line(summary, rule),
+            "color": 0x16A085,
+        }]
+        if as_of_date.weekday() == 4:
+            policy_start = dt.date.fromisoformat(
+                str(registry.get("policy_started_on") or as_of_date.isoformat())
+            )
+            card = validated_tracking.weekly_scorecard(
+                ledger_cursor, today=as_of_date, policy_start=policy_start, rule=rule,
+            )
+            embeds.append(validated_tracking.scorecard_embed(card, rule))
+        return embeds
+    except Exception as exc:
+        try:
+            ledger_connection.rollback()
+        except Exception:
+            pass
+        print(f"[market signal] validated tracking failed: {type(exc).__name__}: {exc}")
+        return [{
+            "title": "上線追蹤暫時無法更新",
+            "description": "今天的追蹤紀錄寫入失敗（已記在系統日誌），成績會在下次補上。",
+            "color": 0xE67E22,
+        }]
+
+
 def _send_failure_notice(
     payload: dict[str, Any], notifier: DiscordNotify, *, cursor=None, connection=None,
 ) -> bool:
+    if _failure_notice_is_quiet(payload.get("scan_mode")):
+        print(
+            "[market signal] intraday failure notice suppressed (log only): "
+            f"{payload.get('error_message')}"
+        )
+        return True
     run_key = str(payload.get("run_key") or "unknown")
-    message = "⚠️ 台股訊號雷達｜流程需要檢查"
+    print(
+        "[market signal] failure detail (log only): "
+        f"mode={payload.get('scan_mode')} run={payload.get('airflow_run_id') or run_key} "
+        f"error={payload.get('error_message')}"
+    )
+    scan_mode = str(payload.get("scan_mode") or "")
+    scope = "盤中公告快訊" if scan_mode == "intraday" else "收盤訊號"
+    message = f"⚠️ 台股訊號雷達｜本次{scope}未能產出"
     embed = {
-        "title": "分析流程異常",
-        "description": _escape_discord_markdown(payload.get("error_message") or "掃描階段未回傳狀態", 700),
+        "title": f"本次{scope}沒有完成",
+        "description": (
+            "分析流程中斷，這次沒有完整訊號可看。"
+            "**這不代表市場沒有訊號**，請勿把這次空缺當成『今天沒事』；"
+            "原因已寫入系統紀錄，下一輪排程會重新分析。"
+        ),
         "color": 0xC0392B,
-        "fields": [
-            {"name": "掃描模式", "value": _escape_discord_markdown(payload.get("scan_mode"), 24) or "未知", "inline": True},
-            {"name": "Airflow run", "value": _escape_discord_markdown(payload.get("airflow_run_id") or run_key, 120) or "未知", "inline": True},
-        ],
     }
     try:
         if cursor is not None and connection is not None and run_key != "unknown":
@@ -9135,7 +8744,7 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
         }
     notifier = _discord_notifier()
     if payload.get("status") != "ready":
-        sent = _send_failure_notice(payload, notifier)
+        sent = _send_capture_failure_notice(payload, notifier)
         if not sent:
             raise RuntimeError("market scan failed and its failure notice was not delivered")
         raise RuntimeError("market scan failed; failure notice was delivered")
@@ -9220,18 +8829,8 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
                 "taifex_market_positioning": _load_taifex_market_positioning(
                     cursor, as_of_date, started_at
                 ),
-                "taifex_market_option_positioning": _load_taifex_market_option_positioning(
-                    cursor, as_of_date, started_at
-                ),
-                "taifex_large_trader_context": _load_taifex_large_trader_context(
-                    cursor, as_of_date, started_at
-                ),
-                "tpex_daytrade_market_context": _load_tpex_daytrade_market_context(
-                    cursor, as_of_date, started_at
-                ),
-                "market_total_return_context": _load_daily_market_total_return_context(
-                    cursor, as_of_date, started_at
-                ),
+                "market_index_moves": _load_daily_index_moves(cursor, as_of_date),
+                "signal_scoreboard": _load_signal_scoreboard(cursor, as_of_date),
             }
             if (
                 source_status == "partial"
@@ -9248,15 +8847,42 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
                 daily_run.setdefault("source_issues", []).extend(
                     payload["market_coverage_issues"]
                 )
-            message = _format_daily_message(daily_run, candidates)
-            embeds = _format_daily_embeds(daily_run, candidates)
-            candidate_hashes_by_embed = _daily_candidate_embed_hashes(candidates)
+            if daily_run.get("source_issues"):
+                # Collection diagnostics belong in the task log, not in the
+                # trading channel; the digest only states what affects signals.
+                print(
+                    "[market signal] source issues (log only): "
+                    + " | ".join(str(issue) for issue in daily_run["source_issues"])
+                )
+            if VALIDATED_DIGEST_MODE:
+                message, embeds, digest_status, digest_version = (
+                    _build_validated_daily_digest(as_of_date, cursor, connection)
+                )
+                candidate_hashes_by_embed = {}
+                if digest_status != "ok":
+                    try:
+                        can_retry = bool(task_instance and task_instance.is_eligible_to_retry())
+                    except Exception:
+                        can_retry = False
+                    if can_retry:
+                        # Prices may still be landing; retry instead of recording a
+                        # final 'not ready' message for the day.
+                        raise PriceDataNotReadyError(
+                            f"same-day prices not fully available for {as_of_date}"
+                        )
+            else:
+                message = _format_daily_message(daily_run, candidates)
+                embeds = _format_daily_embeds(daily_run, candidates)
+                candidate_hashes_by_embed = _daily_candidate_embed_hashes(candidates)
             date_key = as_of_date.isoformat() if as_of_date else "no-price-date"
             batches = _split_discord_embed_batches(message, embeds)
             sent_count = 0
             failed_count = 0
             for batch_index, batch in enumerate(batches, start=1):
-                batch_message = f"{message}｜第 {batch_index}/{len(batches)} 批"
+                batch_message = (
+                    message if len(batches) == 1
+                    else f"{message}｜第 {batch_index}/{len(batches)} 批"
+                )
                 batch_candidate_hashes = []
                 for embed in batch:
                     embed_signature = json.dumps(
@@ -9265,9 +8891,14 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
                     matching_hashes = candidate_hashes_by_embed.get(embed_signature) or []
                     if matching_hashes:
                         batch_candidate_hashes.append(matching_hashes.pop(0))
-                dedupe_key = hashlib.sha256(
-                    f"daily|{date_key}|part|{batch_index}|of|{len(batches)}".encode("utf-8")
-                ).hexdigest()
+                dedupe_key = (
+                    _daily_digest_dedupe_key(
+                        date_key, batch_index, len(batches),
+                        status=digest_status, version=digest_version,
+                    )
+                    if VALIDATED_DIGEST_MODE
+                    else _daily_digest_dedupe_key(date_key, batch_index, len(batches))
+                )
                 if _send_and_record(
                     cursor, connection, notifier, dedupe_key=dedupe_key,
                     run_key=run_key, message=batch_message, embeds=batch,
@@ -9281,18 +8912,24 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
                 f"failed={failed_count}"
             )
             if failed_count:
-                raise RuntimeError(
+                raise NotificationDeliveryError(
                     "daily digest notification was not fully delivered: "
                     f"sent={sent_count}/{len(batches)}, failed={failed_count}"
                 )
-            outcome_review = _notify_matured_signal_outcomes(
-                cursor, connection, notifier,
-                run_key=run_key, as_of_date=as_of_date, now=_now_taipei(),
-            )
-            annual_review_delivery = _notify_due_annual_signal_reviews(
-                cursor, connection, notifier,
-                run_key=run_key, as_of_date=as_of_date, now=_now_taipei(),
-            )
+            if VALIDATED_DIGEST_MODE:
+                # The legacy review messages score unvalidated signals against an
+                # index benchmark; they stay in the ledger but are not pushed.
+                outcome_review = {"status": "suppressed", "failed": 0}
+                annual_review_delivery = {"status": "suppressed", "failed": 0}
+            else:
+                outcome_review = _notify_matured_signal_outcomes(
+                    cursor, connection, notifier,
+                    run_key=run_key, as_of_date=as_of_date, now=_now_taipei(),
+                )
+                annual_review_delivery = _notify_due_annual_signal_reviews(
+                    cursor, connection, notifier,
+                    run_key=run_key, as_of_date=as_of_date, now=_now_taipei(),
+                )
             print(
                 "[market signal] matured outcome review; "
                 + json.dumps(outcome_review, ensure_ascii=False, default=str)
@@ -9302,7 +8939,7 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
                 + json.dumps(annual_review_delivery, ensure_ascii=False, default=str)
             )
             if outcome_review.get("failed") or annual_review_delivery.get("failed"):
-                raise RuntimeError(
+                raise NotificationDeliveryError(
                     "one or more backtest review notifications were not delivered"
                 )
             cursor.execute(
@@ -9315,6 +8952,29 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
                 "candidates": candidate_count, "batches": len(batches),
                 "matured_outcome_review": outcome_review,
                 "annual_review_delivery": annual_review_delivery,
+            }
+
+        if mode == "intraday" and not INTRADAY_PUSH_ENABLED:
+            # Announcement alerts have no validated edge: keep the ledger rows
+            # (outcomes keep being tracked) and advance the cursor, but stay quiet.
+            proposed_cursor = payload.get("proposed_source_cursor_id")
+            if proposed_cursor is not None:
+                cursor.execute(
+                    """
+                    INSERT INTO market_signal_state (state_key, state_text, updated_at)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE state_text=VALUES(state_text), updated_at=VALUES(updated_at)
+                    """,
+                    (INTRADAY_CURSOR_KEY, str(int(proposed_cursor)), _now_taipei()),
+                )
+            connection.commit()
+            print(
+                "[market signal] intraday push disabled (unvalidated); "
+                f"recorded {len(candidates)} candidates without notifying"
+            )
+            return {
+                "sent": 0, "failed": 0, "mode": "intraday",
+                "candidates": len(candidates), "suppressed": len(candidates),
             }
 
         _refresh_intraday_company_names(cursor, candidates)
@@ -9517,69 +9177,19 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
                         cursor, connection, "complete", _now_taipei()
                     )
             elif current_fingerprint != previous_fingerprint:
-                source_warning_status = "unconfirmed"
+                # Source-collection diagnostics (row counts, HTTP codes,
+                # exception names) are operational detail. They stay in the task
+                # log and source_runs; the trading channel only gets signals.
                 source_run_id = str(payload.get("source_dag_run_id") or run_key)
-                data_review_required = collection_status == "data_review_required"
-                warning = (
-                    "⚠️ 台股訊號雷達｜來源批次品質待確認"
-                    if data_review_required
-                    else "⚠️ 台股訊號雷達｜本輪來源收集不完整"
+                print(
+                    "[market signal] source collection issues (log only) "
+                    f"status={collection_status} run={source_run_id}: "
+                    + " | ".join(source_issues[:20])
                 )
-                displayed_issues = source_issues[:7]
-                if len(source_issues) > len(displayed_issues):
-                    displayed_issues.append(f"…另有 {len(source_issues) - len(displayed_issues)} 項")
-                warning_embed = {
-                    "title": (
-                        "來源批次品質待確認"
-                        if data_review_required else "部分來源未完成"
-                    ),
-                    "description": (
-                        "來源任務已成功，但至少一批有隔離列、空回應或列數核帳問題；"
-                        "未確認來源語意前，訊號名單請視為暫定。"
-                        if data_review_required
-                        else "本輪仍已分析可用資料；訊號名單請視為暫定。"
-                    ),
-                    "color": 0xD68910,
-                    "fields": [
-                        {"name": "來源待確認項目", "value": "\n".join(displayed_issues)[:1000], "inline": False},
-                        {"name": "來源 DAG run", "value": _escape_discord_markdown(source_run_id, 140), "inline": False},
-                    ],
-                }
-                warning_key = hashlib.sha256(
-                    f"collection-warning|{source_run_id}".encode("utf-8")
-                ).hexdigest()
-                existing_warning = _notification_record(cursor, warning_key)
-                warning_receipt_confirmed = bool(
-                    existing_warning and existing_warning[0] == "sent"
+                _save_source_collection_alert_fingerprint(
+                    cursor, connection, current_fingerprint, _now_taipei()
                 )
-                if warning_receipt_confirmed:
-                    source_warning_status = "already_sent"
-                    source_warning_receipt_confirmed = True
-                    _save_source_collection_alert_fingerprint(
-                        cursor, connection, current_fingerprint, _now_taipei()
-                    )
-                elif _send_and_record(
-                    cursor, connection, notifier, dedupe_key=warning_key,
-                    run_key=run_key, message=warning, embeds=[warning_embed],
-                    now=_now_taipei(),
-                ):
-                    source_warning_status = "sent"
-                    source_warning_receipt_confirmed = True
-                    _save_source_collection_alert_fingerprint(
-                        cursor, connection, current_fingerprint, _now_taipei()
-                    )
-                else:
-                    warning_record = _notification_record(cursor, warning_key)
-                    if warning_record and warning_record[0] in {
-                        "accepted_unverified", "delivery_unknown",
-                    }:
-                        # Preserve at-most-once behavior after an ambiguous receipt.
-                        _save_source_collection_alert_fingerprint(
-                            cursor, connection, current_fingerprint, _now_taipei()
-                        )
-                    else:
-                        cursor_stalled = True
-                    all_delivered = False
+                source_warning_status = "logged_only"
             else:
                 source_warning_status = "unchanged"
         if not cursor_stalled:
@@ -9599,7 +9209,7 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
         )
         connection.commit()
         if not all_delivered:
-            raise RuntimeError("one or more intraday signal messages were not delivered")
+            raise NotificationDeliveryError("one or more intraday signal messages were not delivered")
         return {
             "sent": sent_count,
             "candidate_batches_sent": sent_count,
@@ -9617,6 +9227,13 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
             raise
         if connection:
             connection.rollback()
+        if isinstance(exc, RetryableNotificationError):
+            # The analysis finished; only Discord delivery (or late-landing prices)
+            # is the problem. Telling the user "未能產出" would be false and would go
+            # through the same failing channel, so keep it in the task log and let
+            # the Airflow retry resend what the ledger shows as failed.
+            print(f"[market signal] retryable notification problem (log only): {exc}")
+            raise
         failure_payload = dict(payload)
         failure_payload["error_message"] = f"通知階段：{type(exc).__name__}: {exc}"[:500]
         sent = _send_failure_notice(

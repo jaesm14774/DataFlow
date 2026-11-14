@@ -280,6 +280,18 @@ The after-close collector runs on weekdays; it does not backfill missed days
 automatically, so the benchmark comparison and five-session margin context
 appear only after enough dated records have accumulated.
 
+The TWSE margin file has no date column and is regenerated early the next morning,
+so an evening scan holds the previous session. The adapter therefore dates it by
+content: it looks back up to five weekdays and accepts the day whose official dated
+`MI_MARGN` report (`www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN`) matches at
+least 99% of the file's previous/today financing balances over at least 300 codes.
+Without a match the rows stay quarantined. Temporary market closures that official
+calendars omit (typhoon days) are listed in `MARKET_ONLY_CLOSURES` in
+`dags/collect_holiday_info.py` and re-applied after each calendar reload; add a date
+there only with the exchange's announcement as the basis. No public per-stock
+securities-borrowing fee exists (about 98% of lending is negotiated), so borrow cost
+is not collected; only quantities (`TWT96U`, `TWT72U`) are published.
+
 ### TPEx daily day-trade market aggregate
 
 The approved `tpex_daytrade_market_summary_daily` source uses the official
@@ -606,9 +618,16 @@ before any directional interpretation is considered.
 The live read-only contract probe on 2026-10-04 returned one valid, positive-
 quantity planned row from each market, both dated 2026-10-02. Each
 untransferred endpoint returned one date-only blank sentinel with no valid
-security code or quantity. The normalizer quarantines these sentinel rows
-instead of turning them into zero-share observations. These are event feeds:
-an empty event list does not mean missing stock coverage or zero trading.
+security code or quantity. The old normalizer quarantined these rows because
+the fixed `市場別` label was the only populated field. It now omits a dated row
+only when the company fields and all substantive report fields are empty;
+incomplete rows with any report content still require review. This treats the
+sentinel as no disclosure, never as a zero-share observation. TWSE and TPEx
+quarterly forecast-variance endpoints are threshold-event lists; their API
+descriptions specify minimum variance thresholds, so a successful empty list
+means no qualifying event for that observation, not missing stock coverage.
+[TWSE OpenAPI](https://openapi.twse.com.tw/)
+[TPEx OpenAPI](https://www.tpex.org.tw/openapi/)
 Natural scheduled runs still need to verify effective dates, raw/accepted/
 quarantined counts, source freshness, and listed/OTC coverage.
 
@@ -1226,3 +1245,41 @@ listed/OTC event codes, and source-catalog contract. Until that receipt exists,
 an empty or stale response remains unknown.
 
 \n
+
+## Research-only signal families (non-voting)
+
+`research_signals.py` holds a pre-registered table of candidate families and the
+validation statistics (rank IC, Benjamini-Hochberg, Student-t, within-date shuffle
+control). The daily scan stores `research_scores`, `research_family_directions`,
+`research_scored_counts` and `research_policy_version` on each `stock_evidence`
+snapshot. They never enter `family_directions`, the three-family candidate rule,
+`POLICY_VERSION`, hashes or notification cards. `summarize_daily_backtest` reports
+them in `research_universe_relative` (versus the same-date evaluated-universe mean)
+and `research_family_summary` (date-block t, BH, at least 20 independent dates).
+Historical evidence and the point-in-time rules are in
+`docs/research_signal_family_backtest_20261108.md`.
+
+News-title polarity (`research:news_polarity_5d`) is an event family: the daily
+scan counts each stock's news titles over the last five sessions
+(`research_signals.news_polarity_by_code`, titles after 13:30 belong to the next
+session, nothing past the as-of close is used, and the query is gated on the
+ingestion timestamp). A stock with at least two polarity-labelled titles and
+|polarity| >= 0.5 gets a direction in `research_family_directions`, and
+`research_news_context` records the counts and whether the title direction agrees
+with the trailing 5-day return, so diagnostics can separate momentum restatement.
+If the news database is unreachable the scan continues without it. The news and PTT
+attention-shock families remain historical-study only (no forward feed).
+
+## 推播政策：只推通過驗證的訊號（2026-11-14）
+
+- 依據：`docs/signal_validation_report_20261114.md`（stock 資料庫 2016–2026，逐日推論、樣本外、扣成本、BH 校正）。12 個常見訊號 × 3 種持有天數中，只有「突破 60 日高＋爆量，持有 10 個交易日」通過，且優勢很小。
+- 收盤後（`daily`）只發一則白話摘要：市場概況＋通過驗證的訊號（最多 5 檔）＋歷史統計與限制；沒有訊號就說「今日無通過驗證的訊號」；收盤價資料未到齊則明說「價格資料尚未更新」，不誤報成無訊號。
+- 規則登錄在 `dags/source_extension/validated_signals.json`；`status` 改成 `retired` 即停用。新增規則必須先用 `docs/signal_validation_research.py` 驗證。
+- 盤中 15 分鐘公告快訊預設關閉（`INTRADAY_PUSH_ENABLED=False`），候選與後續績效仍寫入帳本；要恢復舊行為把 `VALIDATED_DIGEST_MODE`、`INTRADAY_PUSH_ENABLED` 改回 `False/True`。
+- Discord webhook 單次請求約 10,000 bytes 上限（超過回 HTTP 413），程式以 `DISCORD_REQUEST_BYTE_LIMIT` 拆批。
+- Discord 送不出去（413、網路）不再被誤報成「未能產出」，只寫入任務日誌並由 Airflow 重試補送；真正的掃描失敗通知現在以 run_key 去重，重試不會重複送。
+- 上線追蹤（每項改動都要有證據）：
+  - 每天推出的名單（含沒列出的）都寫入 `validated_signal_picks`（含規則版本、排名、是否列出），持有 10 個交易日後結算，基準是「訊號日流動性達標的 4 位數股票，同一段時間的平均報酬」，與回測同口徑；`rule_id + as_of_date + entity_id` 唯一，重跑不會重複計算。
+  - 每天摘要附「上線後成績（不是回測）」一行，與回測預期並列；已結算 60 檔以上且扣成本後為負時，會直接建議停用或重新驗證。
+  - 每週五摘要附「本週追蹤」：每週推播則數、送不出去則數、「未能產出」通知數（對照政策上線前 14 天的每週平均），加上上線成績。基準日為 `validated_signals.json` 的 `policy_started_on`。
+  - 追蹤寫入失敗會顯示在摘要裡，不會靜默。

@@ -445,6 +445,34 @@ SCHEMA_STATEMENTS = (
         PRIMARY KEY (state_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
+    """
+    CREATE TABLE IF NOT EXISTS validated_signal_picks (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        rule_id VARCHAR(64) NOT NULL,
+        rule_version VARCHAR(32) NOT NULL,
+        as_of_date DATE NOT NULL,
+        entity_id VARCHAR(16) NOT NULL,
+        security_name VARCHAR(64) NULL,
+        signal_close DECIMAL(12,4) NOT NULL,
+        volume_ratio DECIMAL(10,3) NOT NULL,
+        rank_in_digest SMALLINT NOT NULL,
+        shown TINYINT(1) NOT NULL,
+        horizon_sessions SMALLINT NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        entry_date DATE NULL,
+        entry_close DECIMAL(12,4) NULL,
+        exit_date DATE NULL,
+        exit_close DECIMAL(12,4) NULL,
+        stock_return_pct DECIMAL(10,4) NULL,
+        universe_mean_return_pct DECIMAL(10,4) NULL,
+        excess_return_pct DECIMAL(10,4) NULL,
+        settled_at DATETIME NULL,
+        created_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_validated_signal_pick (rule_id, as_of_date, entity_id),
+        KEY ix_validated_signal_pick_status (rule_id, status, as_of_date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
 )
 
 PORTFOLIO_SCHEMA_STATEMENTS = tuple(

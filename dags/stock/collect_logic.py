@@ -1228,6 +1228,7 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
         soup=BeautifulSoup(response.text,'lxml')
 
         img_url='https://bsr.twse.com.tw/bshtm/'+[s.get('src') for s in soup.find_all('img') if bool(re.search(string=str(s),pattern=r'CaptchaImage'))][0]
+        os.makedirs(os.path.dirname(img_path), exist_ok=True)  # temp dir is untracked runtime scratch
         with open(img_path, 'wb') as f:
             resp = session.get(img_url, stream=True, timeout=60)
             resp.raw.decode_content = True

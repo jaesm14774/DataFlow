@@ -60,3 +60,5 @@ env/
 # OS related
 .DS_Store
 Thumbs.db
+# Runtime scratch files (captcha images, temp CSVs) - never commit
+dags/stock/temp/

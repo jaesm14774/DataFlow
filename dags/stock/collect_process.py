@@ -129,6 +129,18 @@ def margin_trade_collect():
     
     print('[stock DAG] 融資融券收集結束')
 
+#失敗時送到「程式執行狀態」頻道（與每週收集同一個 webhook）；讀不到設定就不掛回呼，不讓 DAG 匯入失敗
+def failure_callback():
+    try:
+        from lib.notify import DiscordNotify
+        token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name').loc['程式執行狀態','token']
+        notify=DiscordNotify()
+        notify.webhook_url=token
+        return notify.task_custom_failure_function
+    except Exception as exc:
+        print(f'[stock DAG] 失敗通知未設定: {type(exc).__name__}: {exc}')
+        return None
+
 #每日融資融券: 目標交易日 = DAG 觸發當天（台北時間）
 def margin_daily_target_date(logical_date=None):
     if BACKFILL_DATE:

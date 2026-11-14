@@ -259,3 +259,41 @@ def test_each_pick_settles_with_the_holding_period_it_was_recorded_under():
     assert counts["settled"] == 2
     exit_dates = {params[-1]: params[2] for params in updates}  # id -> exit_date
     assert exit_dates[1] == days[50 + 1 + 5].date() and exit_dates[2] == days[50 + 1 + 10].date()
+
+
+def test_feed_landing_is_recorded_per_digest_date_and_reruns_overwrite():
+    cursor = _Cursor()
+    written = validated_tracking.record_feed_landing(
+        cursor, dt.date(2026, 11, 17), {"price": True, "inst": True, "margin": False, "tdcc": True}
+    )
+    assert written == 4
+    assert all("ON DUPLICATE KEY UPDATE" in sql for sql, _ in cursor.executed)
+    assert [params[2] for _, params in cursor.executed] == [1, 1, 0, 1]
+
+
+def test_scorecard_reports_how_often_each_feed_was_ready_at_digest_time():
+    line = validated_tracking.landing_line({"price": (9, 9), "margin": (1, 9), "tdcc": (9, 9)})
+    assert "價量 9/9" in line and "融資 1/9" in line and "集保大戶 9/9" in line
+    assert "法人" not in line  # a feed with no observation is not invented
+    assert "還沒有紀錄" in validated_tracking.landing_line({})
+
+
+def test_landing_summary_groups_by_feed():
+    class Cursor(_Cursor):
+        def fetchall(self):
+            return [("margin", 2, 9), ("price", 9, 9)]
+
+    summary = validated_tracking.landing_summary(Cursor(), dt.date(2026, 11, 20))
+    assert summary == {"margin": (2, 9), "price": (9, 9)}
+
+
+def test_scorecard_embed_carries_the_landing_line():
+    card = {
+        "before_per_week": {"messages": 30, "failed": 2, "failure_notices": 1},
+        "after_week": {"messages": 6, "failed": 0, "failure_notices": 0},
+        "live": {RULE["id"]: validated_tracking.summarize_by_date([], 10)},
+        "shadow": validated_tracking.summarize_by_date([], 10),
+        "landing": {"margin": (4, 5)},
+    }
+    embed = validated_tracking.scorecard_embed(card, [RULE])
+    assert "融資 4/5" in embed["description"]

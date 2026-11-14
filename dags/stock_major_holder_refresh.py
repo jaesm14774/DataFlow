@@ -13,7 +13,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.timetables.trigger import CronTriggerTimetable
 
-from stock.collect_process import major_holder_collect
+from stock.collect_process import failure_callback, major_holder_collect
 
 
 with DAG(
@@ -34,6 +34,7 @@ with DAG(
         "execution_timeout": datetime.timedelta(hours=1),
         "email_on_failure": False,
         "email_on_retry": False,
+        "on_failure_callback": failure_callback(),
     },
     tags=["stock", "TDCC", "signal-source"],
 ) as dag:

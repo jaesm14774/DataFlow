@@ -345,6 +345,60 @@ def shadow_line(summary: dict[str, Any]) -> str:
     )
 
 
+FEED_LABELS = {"price": "價量", "inst": "法人", "margin": "融資", "tdcc": "集保大戶"}
+
+
+def record_feed_landing(cursor, as_of_date: dt.date, landing: dict[str, bool]) -> int:
+    """Remember, per digest date, which feeds had landed when the digest was built.
+
+    The source tables' ``create_time`` cannot answer this afterwards (a re-collection rewrites
+    it), so the digest records its own observation. The latest attempt for a date wins.
+    """
+
+    written = 0
+    for feed, landed in landing.items():
+        cursor.execute(
+            """
+            INSERT INTO validated_feed_landing (signal_date, feed, landed)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE landed = VALUES(landed), recorded_at = CURRENT_TIMESTAMP
+            """,
+            (as_of_date, feed, int(bool(landed))),
+        )
+        written += 1
+    return written
+
+
+def landing_summary(cursor, today: dt.date, days: int = 14) -> dict[str, tuple[int, int]]:
+    """feed -> (digest days with the feed landed, digest days observed) over the last ``days`` days."""
+
+    cursor.execute(
+        """
+        SELECT feed, COALESCE(SUM(landed), 0), COUNT(*)
+        FROM validated_feed_landing
+        WHERE signal_date > %s AND signal_date <= %s
+        GROUP BY feed
+        """,
+        (today - dt.timedelta(days=days), today),
+    )
+    return {str(feed): (int(landed), int(total)) for feed, landed, total in cursor.fetchall()}
+
+
+def landing_line(summary: dict[str, tuple[int, int]]) -> str:
+    """One scorecard line: how often each feed was ready when the digest ran."""
+
+    parts = [
+        f"{label} {summary[feed][0]}/{summary[feed][1]}"
+        for feed, label in FEED_LABELS.items() if feed in summary and summary[feed][1]
+    ]
+    if not parts:
+        return "資料到齊率（摘要產生時，近 14 天）：還沒有紀錄"
+    return (
+        "資料到齊率（摘要產生時，近 14 天的交易日）：" + "｜".join(parts)
+        + "。融資改為每日收集之前，週二到週五幾乎都是未到（約 0/4）。"
+    )
+
+
 def weekly_scorecard(
     ledger_cursor, *, today: dt.date, policy_start: dt.date, rules: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -376,7 +430,16 @@ def weekly_scorecard(
             for rule in rules
         },
         "shadow": live_summary(ledger_cursor, SHADOW_INTRADAY_RULE["id"]),
+        "landing": _landing_or_empty(ledger_cursor, today),
     }
+
+
+def _landing_or_empty(cursor, today: dt.date) -> dict[str, tuple[int, int]]:
+    try:
+        return landing_summary(cursor, today)
+    except Exception as exc:  # the scorecard must still go out without this line
+        print(f"[validated tracking] feed landing summary unavailable: {type(exc).__name__}: {exc}")
+        return {}
 
 
 def long_term_line(rule: dict[str, Any]) -> str:
@@ -423,5 +486,7 @@ def scorecard_embed(card: dict[str, Any], rules: list[dict[str, Any]]) -> dict[s
         *[tracking_line(card["live"][rule["id"]], rule) for rule in rules if rule["status"] == "active"],
         shadow_line(card["shadow"]),
         LIVE_REFERENCE_NOTE,
+        "",
+        landing_line(card.get("landing") or {}),
     ]
     return {"title": "本週追蹤：這些改動有沒有變好", "description": "\n".join(lines), "color": 0x8E44AD}

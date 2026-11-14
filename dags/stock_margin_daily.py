@@ -23,6 +23,7 @@ from airflow.sensors.python import PythonSensor
 from airflow.timetables.trigger import CronTriggerTimetable
 
 from stock.collect_process import (
+    failure_callback,
     margin_daily_is_trading_day,
     margin_daily_source_ready,
     margin_trade_daily_collect,
@@ -44,6 +45,8 @@ with DAG(
         "owner": "jaesm14774",
         "email_on_failure": False,
         "email_on_retry": False,
+        # 失敗會直接通知，不用等到隔天摘要才從「資料未到」看出來
+        "on_failure_callback": failure_callback(),
     },
     tags=["stock", "margin", "signal-source"],
 ) as dag:

@@ -454,7 +454,7 @@ SCHEMA_STATEMENTS = (
         entity_id VARCHAR(16) NOT NULL,
         security_name VARCHAR(64) NULL,
         signal_close DECIMAL(12,4) NULL,
-        volume_ratio DECIMAL(10,3) NULL,
+        metric_value DECIMAL(14,4) NULL,
         signal_keys VARCHAR(255) NULL,
         rank_in_digest SMALLINT NOT NULL,
         shown TINYINT(1) NOT NULL,
@@ -472,6 +472,48 @@ SCHEMA_STATEMENTS = (
         PRIMARY KEY (id),
         UNIQUE KEY uq_validated_signal_pick (rule_id, as_of_date, entity_id),
         KEY ix_validated_signal_pick_status (rule_id, status, as_of_date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS validated_rule_status (
+        rule_id VARCHAR(64) NOT NULL,
+        ruleset_version VARCHAR(32) NOT NULL,
+        status VARCHAR(16) NOT NULL,
+        horizon_sessions SMALLINT NOT NULL,
+        status_since DATE NOT NULL,
+        last_evaluated_on DATE NULL,
+        evidence_json LONGTEXT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (rule_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS validated_rule_history (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        rule_id VARCHAR(64) NOT NULL,
+        from_status VARCHAR(16) NULL,
+        to_status VARCHAR(16) NOT NULL,
+        reason VARCHAR(255) NOT NULL,
+        evidence_json LONGTEXT NULL,
+        decided_on DATE NOT NULL,
+        created_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_validated_rule_history (rule_id, decided_on, to_status),
+        KEY ix_validated_rule_history_date (decided_on)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS validated_rule_daily (
+        rule_id VARCHAR(64) NOT NULL,
+        horizon SMALLINT NOT NULL,
+        signal_date DATE NOT NULL,
+        n_names INT NOT NULL,
+        mean_excess_pct DOUBLE NULL,
+        n_win INT NOT NULL,
+        n_win_after_cost INT NOT NULL,
+        base_n INT NOT NULL,
+        base_win_after_cost INT NOT NULL,
+        PRIMARY KEY (rule_id, horizon, signal_date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
 )

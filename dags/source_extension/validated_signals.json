@@ -1,32 +1,345 @@
 {
-  "version": "validated_v1",
+  "version": "validated_v2",
+  "ruleset": "rules_v1",
   "validated_on": "2026-11-14",
   "policy_started_on": "2026-11-15",
   "report": "docs/signal_validation_report_20261114.md",
-  "note": "Only rules with status 'active' may be pushed to Discord. Set status to 'retired' to demote a rule; everything else stays in the ledger only.",
+  "note": "Seed configuration only. A rule's live status comes from the validated_rule_status table, which the weekly revalidation moves under the hysteresis policy in rule_lifecycle.py; this file is used for seeds and as the fallback when the table is unreachable.",
   "rules": [
     {
-      "id": "breakout_60d_volume",
-      "status": "active",
-      "label": "突破 60 日高＋爆量",
-      "horizon_sessions": 10,
-      "params": {
-        "lookback_sessions": 60,
-        "volume_avg_sessions": 20,
-        "volume_ratio_min": 2.0,
-        "min_turnover_ntd": 50000000,
-        "max_names_shown": 5
-      },
+      "id": "foreign_buy_5d_top",
+      "seed_status": "candidate",
+      "horizon_sessions": 5,
+      "max_names_shown": 5,
       "evidence": {
-        "history": "2016-2026",
-        "oos_start": "2023-01-01",
+        "rule_id": "foreign_buy_5d_top",
+        "horizon": 5,
+        "oos_dates": 892,
+        "mean_excess_pct": 0.0447,
+        "mean_excess_after_cost_pct": -0.5553,
+        "t_nw": 0.375,
+        "win_rate_pct": 39.92,
+        "base_win_rate_pct": 38.27,
+        "is_mean_excess_pct": -0.0127,
+        "bh_pass": false,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 11,
+        "years_positive": 5,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2026-08-03",
+          "to": "2026-11-05",
+          "mean_excess_after_cost_pct": -0.5129935561021248
+        }
+      }
+    },
+    {
+      "id": "trust_buy_5d_top",
+      "seed_status": "candidate",
+      "horizon_sessions": 20,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "trust_buy_5d_top",
+        "horizon": 20,
+        "oos_dates": 877,
+        "mean_excess_pct": 0.2103,
+        "mean_excess_after_cost_pct": -0.3897,
+        "t_nw": 0.786,
+        "win_rate_pct": 42.24,
+        "base_win_rate_pct": 39.68,
+        "is_mean_excess_pct": 0.1515,
+        "bh_pass": false,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 11,
+        "years_positive": 6,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2026-07-13",
+          "to": "2026-10-13",
+          "mean_excess_after_cost_pct": 0.004717874832834035
+        }
+      }
+    },
+    {
+      "id": "inst_buy_streak_5d",
+      "seed_status": "candidate",
+      "horizon_sessions": 5,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "inst_buy_streak_5d",
+        "horizon": 5,
+        "oos_dates": 835,
+        "mean_excess_pct": 0.128,
+        "mean_excess_after_cost_pct": -0.472,
+        "t_nw": 1.346,
+        "win_rate_pct": 40.07,
+        "base_win_rate_pct": 38.27,
+        "is_mean_excess_pct": -0.0053,
+        "bh_pass": false,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 11,
+        "years_positive": 7,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2026-07-20",
+          "to": "2026-11-05",
+          "mean_excess_after_cost_pct": -0.19125527994800728
+        }
+      }
+    },
+    {
+      "id": "foreign_trust_both_buy_3d",
+      "seed_status": "active",
+      "horizon_sessions": 20,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "foreign_trust_both_buy_3d",
+        "horizon": 20,
+        "oos_dates": 734,
+        "mean_excess_pct": 0.9014,
+        "mean_excess_after_cost_pct": 0.3014,
+        "t_nw": 2.351,
+        "win_rate_pct": 42.66,
+        "base_win_rate_pct": 39.68,
+        "is_mean_excess_pct": 0.1514,
+        "bh_pass": true,
+        "gate_pass": true,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 11,
+        "years_positive": 7,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2026-06-24",
+          "to": "2026-10-13",
+          "mean_excess_after_cost_pct": -1.1089742071221584
+        }
+      }
+    },
+    {
+      "id": "breakout_60d_volume",
+      "seed_status": "active",
+      "horizon_sessions": 10,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "breakout_60d_volume",
+        "horizon": 10,
         "oos_dates": 886,
-        "mean_excess_pct": 0.77,
-        "mean_excess_after_cost_pct": 0.17,
-        "t_stat": 3.0,
-        "win_rate_pct": 41.0,
-        "base_win_rate_pct": 39.0,
-        "round_trip_cost_pct": 0.6
+        "mean_excess_pct": 0.7687,
+        "mean_excess_after_cost_pct": 0.1687,
+        "t_nw": 2.96,
+        "win_rate_pct": 40.97,
+        "base_win_rate_pct": 38.96,
+        "is_mean_excess_pct": 0.5172,
+        "bh_pass": true,
+        "gate_pass": true,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 11,
+        "years_positive": 9,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2026-07-16",
+          "to": "2026-10-29",
+          "mean_excess_after_cost_pct": -0.19035324726744757
+        }
+      }
+    },
+    {
+      "id": "volume_surge_3x_up",
+      "seed_status": "candidate",
+      "horizon_sessions": 5,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "volume_surge_3x_up",
+        "horizon": 5,
+        "oos_dates": 914,
+        "mean_excess_pct": 0.3098,
+        "mean_excess_after_cost_pct": -0.2902,
+        "t_nw": 2.251,
+        "win_rate_pct": 38.27,
+        "base_win_rate_pct": 38.27,
+        "is_mean_excess_pct": -0.0503,
+        "bh_pass": true,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 11,
+        "years_positive": 6,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2026-07-31",
+          "to": "2026-11-05",
+          "mean_excess_after_cost_pct": 0.24963324796311892
+        }
+      }
+    },
+    {
+      "id": "margin_cleanup_up",
+      "seed_status": "candidate",
+      "horizon_sessions": 5,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "margin_cleanup_up",
+        "horizon": 5,
+        "oos_dates": 911,
+        "mean_excess_pct": 0.2066,
+        "mean_excess_after_cost_pct": -0.3934,
+        "t_nw": 2.395,
+        "win_rate_pct": 40.16,
+        "base_win_rate_pct": 38.27,
+        "is_mean_excess_pct": 0.0002,
+        "bh_pass": true,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 11,
+        "years_positive": 6,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2026-08-03",
+          "to": "2026-11-05",
+          "mean_excess_after_cost_pct": -0.1121926476231459
+        }
+      }
+    },
+    {
+      "id": "short_squeeze_setup",
+      "seed_status": "candidate",
+      "horizon_sessions": 5,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "short_squeeze_setup",
+        "horizon": 5,
+        "oos_dates": 615,
+        "mean_excess_pct": 0.1686,
+        "mean_excess_after_cost_pct": -0.4314,
+        "t_nw": 0.564,
+        "win_rate_pct": 39.03,
+        "base_win_rate_pct": 38.26,
+        "is_mean_excess_pct": 0.1087,
+        "bh_pass": false,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 7,
+        "years_positive": 4,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2025-12-30",
+          "to": "2026-11-03",
+          "mean_excess_after_cost_pct": 1.8018217014474112
+        }
+      }
+    },
+    {
+      "id": "tdcc_big_holder_up",
+      "seed_status": "candidate",
+      "horizon_sessions": 10,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "tdcc_big_holder_up",
+        "horizon": 10,
+        "oos_dates": 120,
+        "mean_excess_pct": 0.2508,
+        "mean_excess_after_cost_pct": -0.3492,
+        "t_nw": 1.314,
+        "win_rate_pct": 39.68,
+        "base_win_rate_pct": 38.96,
+        "is_mean_excess_pct": 0.1126,
+        "bh_pass": false,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 9,
+        "years_positive": 7,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2024-02-29",
+          "to": "2026-10-29",
+          "mean_excess_after_cost_pct": -0.64731263991121
+        }
+      }
+    },
+    {
+      "id": "oversold_foreign_buy",
+      "seed_status": "candidate",
+      "horizon_sessions": 5,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "oversold_foreign_buy",
+        "horizon": 5,
+        "oos_dates": 412,
+        "mean_excess_pct": -0.3926,
+        "mean_excess_after_cost_pct": -0.9926,
+        "t_nw": -1.456,
+        "win_rate_pct": 41.95,
+        "base_win_rate_pct": 38.27,
+        "is_mean_excess_pct": -0.0568,
+        "bh_pass": false,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 11,
+        "years_positive": 6,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2026-06-23",
+          "to": "2026-11-05",
+          "mean_excess_after_cost_pct": -0.6631347475230904
+        }
+      }
+    },
+    {
+      "id": "foreign_sell_5d_bottom",
+      "seed_status": "candidate",
+      "horizon_sessions": 5,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "foreign_sell_5d_bottom",
+        "horizon": 5,
+        "oos_dates": 892,
+        "mean_excess_pct": -0.4039,
+        "mean_excess_after_cost_pct": -1.0039,
+        "t_nw": -3.812,
+        "win_rate_pct": 37.21,
+        "base_win_rate_pct": 38.27,
+        "is_mean_excess_pct": 0.0065,
+        "bh_pass": false,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 11,
+        "years_positive": 4,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2026-08-03",
+          "to": "2026-11-05",
+          "mean_excess_after_cost_pct": -1.2885763417951797
+        }
+      }
+    },
+    {
+      "id": "tdcc_big_holder_down",
+      "seed_status": "candidate",
+      "horizon_sessions": 5,
+      "max_names_shown": 5,
+      "evidence": {
+        "rule_id": "tdcc_big_holder_down",
+        "horizon": 5,
+        "oos_dates": 121,
+        "mean_excess_pct": -0.0245,
+        "mean_excess_after_cost_pct": -0.6245,
+        "t_nw": -0.235,
+        "win_rate_pct": 38.67,
+        "base_win_rate_pct": 38.26,
+        "is_mean_excess_pct": 0.0254,
+        "bh_pass": false,
+        "gate_pass": false,
+        "round_trip_cost_pct": 0.6,
+        "years_total": 9,
+        "years_positive": 5,
+        "recent_reference": {
+          "dates": 63,
+          "from": "2024-03-06",
+          "to": "2026-11-04",
+          "mean_excess_after_cost_pct": -0.7801594027349656
+        }
       }
     }
   ]

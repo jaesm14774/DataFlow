@@ -95,10 +95,14 @@ def daily_rows_for_range(stock_cursor, start: dt.date, end: dt.date, today: dt.d
     return daily[mask]
 
 
-def refresh_daily(ledger_cursor, stock_cursor, today: dt.date) -> dict[str, int]:
-    """Append every date whose forward returns matured since the last run (seeds on first use)."""
+def refresh_daily(ledger_cursor, stock_cursor, today: dt.date, rebuild: bool = False) -> dict[str, int]:
+    """Append every date whose forward returns matured since the last run (seeds on first use).
 
-    last = latest_stored_date(ledger_cursor)
+    ``rebuild`` recomputes the whole history (idempotent upserts): use it after a data or
+    definition fix so old evidence rows are repaired too.
+    """
+
+    last = None if rebuild else latest_stored_date(ledger_cursor)
     stored = 0
     if last is None:
         start = BACKFILL_START
@@ -233,9 +237,12 @@ def evaluate_statuses(
     return changes
 
 
-def revalidate(ledger_cursor, stock_cursor, registry: dict[str, Any], *, today: dt.date, now: dt.datetime) -> dict[str, Any]:
+def revalidate(
+    ledger_cursor, stock_cursor, registry: dict[str, Any], *, today: dt.date, now: dt.datetime,
+    rebuild: bool = False,
+) -> dict[str, Any]:
     ensure_tables(ledger_cursor)
-    refreshed = refresh_daily(ledger_cursor, stock_cursor, today)
+    refreshed = refresh_daily(ledger_cursor, stock_cursor, today, rebuild=rebuild)
     daily = load_daily(ledger_cursor)
     changes = evaluate_statuses(ledger_cursor, daily, registry, today=today, now=now)
     return {**refreshed, "dates": int(daily["signal_date"].nunique()) if not daily.empty else 0, "changes": changes}
@@ -315,8 +322,10 @@ def recent_transitions(ledger_cursor, as_of_date: dt.date) -> list[dict[str, Any
         return []
 
 
-def run_weekly_revalidation(today: dt.date | None = None) -> dict[str, Any]:
-    """Airflow entry point."""
+def run_weekly_revalidation(today: dt.date | None = None, dag_run=None) -> dict[str, Any]:
+    """Airflow entry point. Trigger with conf {"rebuild": true} to recompute the whole history."""
+
+    rebuild = bool(((getattr(dag_run, "conf", None) or {}).get("rebuild")))
 
     from . import market_signals
     from .registry import _open_connection
@@ -329,7 +338,7 @@ def run_weekly_revalidation(today: dt.date | None = None) -> dict[str, Any]:
     try:
         ledger_conn, ledger_cursor, ledger_engine = _open_connection()
         stock_conn, stock_cursor, stock_engine = market_signals._open_stock_connection()
-        result = revalidate(ledger_cursor, stock_cursor, registry, today=today, now=now)
+        result = revalidate(ledger_cursor, stock_cursor, registry, today=today, now=now, rebuild=rebuild)
         ledger_conn.commit()
         LOGGER.info("signal rule revalidation: %s", result)
         return result

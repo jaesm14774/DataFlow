@@ -1276,6 +1276,8 @@ attention-shock families remain historical-study only (no forward feed).
 - 單一定義來源：`dags/source_extension/signal_rules.py` 定義 12 條規則與資料公布時間（融資延後 1 個交易日、千張大戶延後 3 個交易日），研究回測（`docs/signal_validation_research.py`）、每日偵測（`rule_detection.py`）、每週重驗證共用同一份。
 - 狀態與遲滯（`rule_lifecycle.py`）：`candidate` 觀察中／`active` 推播中／`suspended` 暫停（持續追蹤）。升級要通過完整門檻且在目前狀態滿 90 天；降級要長期（全部樣本外）扣成本後超額為負，且滿 90 天、至少 60 個新訊號日。最近一季只做參考，不參與決定。對照組規則（外資賣超、大戶減持）永遠不推播。
 - 每週六 09:00（`market_signal_revalidate_weekly` DAG）：把已成熟的訊號日追加到 `validated_rule_daily`（第一次執行才會回補全部歷史，之後只讀最近區間），重新計算所有規則並更新 `validated_rule_status`，每次變更寫一列 `validated_rule_history`（原因＋證據快照）。摘要讀狀態時以資料庫為準，連不上就退回 `validated_signals.json` 的種子狀態。
+- 資料或規則定義修正後要重算全部歷史證據：`airflow dags trigger market_signal_revalidate_weekly --conf '{"rebuild": true}'`（冪等 upsert，不需先清表）。
+- 已知的資料入庫時間（以 `create_time` 實測，資料庫為 UTC）：價量與三大法人當天約 16:30（台北）入庫；融資融券目前約每週六上午才批次補入，所以融資規則在週二到週五晚上通常是「資料未到」（誠實地不判斷，不是沒訊號）；集保大戶比例的入庫有時比公布晚 8–9 天，週檢查找不到對應週資料時，大戶規則同樣標示資料未到。這些規則目前都是觀察中，證據仍由事後完整資料每週重算；若要讓它們能在線上即時偵測，需要先把融資與集保的收集改成每日。
 - 收盤後（`daily`）只發一則白話摘要：市場概況＋推播中規則的訊號（每條規則最多 5 檔）＋「目前長期證據（截至日期）」與短期參考；沒有訊號就說「今日沒有符合推播中規則的股票」；價格或某條規則所需的資料（法人、融資、大戶）未到齊，明說資料未到，不誤報成無訊號。規則狀態變更會在下一個交易日的摘要公告一次。
 - 規則集內容或門檻要改，必須登錄新版本（新的登錄日、證據從登錄日往後累積），不可原地改門檻。
 - 盤中 15 分鐘公告快訊預設關閉（`INTRADAY_PUSH_ENABLED=False`），候選以「從未推播的影子名單」寫入 `validated_signal_picks`（`rule_id=intraday_announcement_shadow`），同樣持有 10 個交易日後結算，週五摘要會顯示被關掉的盤中公告到底有沒有跑贏大盤；原本的 `market_signal_outcomes` 只追蹤收盤掃描，不追蹤盤中。要恢復舊行為把 `VALIDATED_DIGEST_MODE`、`INTRADAY_PUSH_ENABLED` 改回 `False/True`。

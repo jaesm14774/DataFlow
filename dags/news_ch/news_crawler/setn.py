@@ -7,6 +7,10 @@ from urllib.parse import urljoin
 from news_ch.news_crawler.base_process import *
 from news_ch.news_crawler.page_utils import safe_publisher_get, validate_publisher_url
 
+# Article hosts the /viewall listing really links to: main site, entertainment, and the
+# health / housing verticals (their pages are parsed by the vertical-layout branch below).
+SETN_ARTICLE_HOSTS={'www.setn.com','star.setn.com','health.setn.com','fuhouse.setn.com'}
+
 class SETN(NewsLogic):
     _source='三立新聞'
     _domain_url='https://www.setn.com'
@@ -97,7 +101,7 @@ class SETN(NewsLogic):
                 href=urljoin(self._domain_url,article_link.get('href',''))
                 try:
                     href=validate_publisher_url(
-                        href,allowed_hosts={'www.setn.com','star.setn.com'},
+                        href,allowed_hosts=SETN_ARTICLE_HOSTS,
                         article_path=re.compile(r'/(?:star/)?news/\d+',re.I),
                     )
                 except ValueError:
@@ -145,7 +149,7 @@ class SETN(NewsLogic):
         self._headers['Referer']=self._domain_url
 
         a=safe_publisher_get(
-            article_url,allowed_hosts={'www.setn.com','star.setn.com'},
+            article_url,allowed_hosts=SETN_ARTICLE_HOSTS,
             article_path=re.compile(r'/(?:star/)?news/\d+',re.I),
             headers=self._headers,timeout=self._timeout,
         )

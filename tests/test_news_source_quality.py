@@ -81,12 +81,12 @@ def test_setn_vertical_uses_corroborated_wall_time(title,date,monkeypatch):
     end = title.split()[0]
     html = f'<{title}>正確子站標題</{end}>'+date+'<div id="ckuse"><p>子站真正正文。</p></div>'
     kw = '__setn_relative_age__=2分鐘前|observed_at=2026-10-14 22:34:00'
-    row = parse(SETN,html,'https://www.setn.com/news/1922716',monkeypatch,kw)
+    row = parse(SETN,html,'https://health.setn.com/news/1922716',monkeypatch,kw)
     assert row['title']=='正確子站標題'
     assert row['created_at']=='2026-10-14 22:32:00'
     assert row['content']=='子站真正正文。'
     with pytest.raises(ValueError):
-        parse(SETN,html,'https://www.setn.com/news/1922716',monkeypatch,'')
+        parse(SETN,html,'https://health.setn.com/news/1922716',monkeypatch,'')
 
 
 def test_tvbs_utf8_and_suffix_are_preserved(monkeypatch):
@@ -306,3 +306,33 @@ def test_article_url_refresh_uses_dml_and_serialized_dag(monkeypatch):
     active_runs=next(keyword.value for keyword in dag_call.keywords
                       if keyword.arg=='max_active_runs')
     assert ast.literal_eval(active_runs)==1
+
+
+@pytest.mark.parametrize('url', [
+    'https://www.setn.com/news/1922700',
+    'https://star.setn.com/news/1922683',
+    'https://health.setn.com/news/1922710',   # health vertical, seen in the live /viewall audit
+    'https://fuhouse.setn.com/news/1922707',  # housing vertical, seen in the live /viewall audit
+])
+def test_setn_listing_keeps_every_publisher_vertical_it_really_links_to(url):
+    import re
+    from news_ch.news_crawler.page_utils import validate_publisher_url
+    from news_ch.news_crawler.setn import SETN_ARTICLE_HOSTS
+    assert validate_publisher_url(url, allowed_hosts=SETN_ARTICLE_HOSTS,
+                                  article_path=re.compile(r'/(?:star/)?news/\d+', re.I)) == url
+
+
+@pytest.mark.parametrize('url', [
+    'https://evil.example/news/1922700',
+    'https://health.setn.com.evil.example/news/1922710',
+    'https://health.setn.com/about',
+    'http://health.setn.com/news/1922710',
+    'https://health.setn.com:8443/news/1922710',
+])
+def test_setn_listing_still_rejects_foreign_hosts_and_non_article_paths(url):
+    import re
+    from news_ch.news_crawler.page_utils import validate_publisher_url
+    from news_ch.news_crawler.setn import SETN_ARTICLE_HOSTS
+    with pytest.raises(ValueError):
+        validate_publisher_url(url, allowed_hosts=SETN_ARTICLE_HOSTS,
+                               article_path=re.compile(r'/(?:star/)?news/\d+', re.I))

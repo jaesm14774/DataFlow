@@ -1,0 +1,274 @@
+{
+  "label": "after",
+  "mode": "read_only_recompute_not_natural_delivery",
+  "natural_run": [
+    "3dda2dd5ce2c9df44dd52b7188444cc1010cad9d2691ab5cdeca706e2e8cf58a",
+    "2026-10-15",
+    "2026-10-15 20:59:28",
+    "source_extension_collect_after_close",
+    "scheduled__2026-10-14T12:00:00+00:00"
+  ],
+  "metrics": {
+    "as_of_date": "2026-10-15",
+    "source_status": "partial",
+    "universe_count": 1948,
+    "universe_market_counts": {
+      "上市": 1054,
+      "上櫃": 894
+    },
+    "market_coverage_by_market": {
+      "上市": {
+        "universe_count": 1054,
+        "price_row_code_count": 1050,
+        "price_count": 1048,
+        "price_invalid_close_code_count": 2,
+        "price_no_trade_code_count": 0,
+        "flow_count": 1043,
+        "flow_readiness": {
+          "rule_version": "equity_order_flow_v2",
+          "status": "evaluated",
+          "source_key": "twse_t86_stored",
+          "vote_enabled": true,
+          "same_day_count": 1044,
+          "source_available_count": 1044,
+          "direction_usable_count": 1043,
+          "qualified_vote_count": 578,
+          "five_session_ready_count": 1027,
+          "three_session_ready_count": 1039,
+          "natural_pit_same_day_count": 0,
+          "traded_without_source_count": 5,
+          "latest_effective_date": "2026-10-15",
+          "source_counts": {
+            "twse_t86_stored": 1044
+          },
+          "expected_session_dates": [
+            "2026-10-08",
+            "2026-10-12",
+            "2026-10-13",
+            "2026-10-14",
+            "2026-10-15"
+          ],
+          "calendar_verified": true,
+          "broker": {
+            "status": "available_subset",
+            "same_day_count": 0,
+            "accepted_panel_count": 0,
+            "direction_usable_count": 0,
+            "qualified_vote_count": 0,
+            "rejected_panel_counts": {
+              "duplicate_invalid_or_mixed_capture_panel": 20,
+              "unbalanced_panel": 5
+            },
+            "latest_effective_date": "2026-10-14"
+          },
+          "blocking_reasons": [],
+          "rejected_institution_counts": {},
+          "cutoff_utc": "2026-10-15T12:59:28",
+          "performance_status": "rules_active_predictive_performance_unvalidated",
+          "stored_collection_time_count": 1044
+        },
+        "traded_without_flow_count": 5,
+        "price_coverage_pct": 99.43,
+        "flow_coverage_pct": 98.96
+      },
+      "上櫃": {
+        "universe_count": 894,
+        "price_row_code_count": 878,
+        "price_count": 872,
+        "price_invalid_close_code_count": 0,
+        "price_no_trade_code_count": 6,
+        "flow_count": 777,
+        "flow_readiness": {
+          "rule_version": "equity_order_flow_v2",
+          "status": "evaluated",
+          "source_key": "tpex_institutional_flow_daily",
+          "vote_enabled": true,
+          "same_day_count": 777,
+          "source_available_count": 777,
+          "direction_usable_count": 777,
+          "qualified_vote_count": 256,
+          "five_session_ready_count": 685,
+          "three_session_ready_count": 716,
+          "natural_pit_same_day_count": 777,
+          "traded_without_source_count": 95,
+          "latest_effective_date": "2026-10-15",
+          "source_counts": {
+            "tpex_institutional_flow_daily": 777
+          },
+          "expected_session_dates": [
+            "2026-10-08",
+            "2026-10-12",
+            "2026-10-13",
+            "2026-10-14",
+            "2026-10-15"
+          ],
+          "calendar_verified": true,
+          "broker": {
+            "status": "source_unavailable_skipped",
+            "same_day_count": null,
+            "accepted_panel_count": null,
+            "direction_usable_count": null,
+            "qualified_vote_count": null,
+            "rejected_panel_counts": {},
+            "latest_effective_date": null
+          },
+          "blocking_reasons": [],
+          "rejected_institution_counts": {},
+          "cutoff_utc": "2026-10-15T12:59:28",
+          "performance_status": "rules_active_predictive_performance_unvalidated",
+          "stored_collection_time_count": 0
+        },
+        "traded_without_flow_count": 95,
+        "price_coverage_pct": 97.54,
+        "flow_coverage_pct": 86.91
+      }
+    },
+    "market_coverage_issues": [
+      "上市當日有 2 檔行情列的收盤缺值、非正或同日互異；未計入有效價格覆蓋，仍視為未知",
+      "上市當日有有效收盤且成交量大於零，但已接入法人來源中未見同日資料 5 檔；此缺列保持未知，不補成零買賣超",
+      "上櫃當日有有效收盤且成交量大於零，但已接入法人來源中未見同日資料 95 檔；此缺列保持未知，不補成零買賣超"
+    ],
+    "price_row_code_count": 1928,
+    "price_invalid_close_code_count": 2,
+    "price_no_trade_code_count": 6,
+    "price_count": 1920,
+    "flow_count": 1820,
+    "revenue_count": 1948,
+    "financial_count": 1903,
+    "borrow_count": 1794,
+    "insider_count": 1939,
+    "dividend_count": 1945,
+    "benchmark_status": "fresh",
+    "benchmark_coverage": [
+      "TAIEX",
+      "TPEX"
+    ],
+    "benchmark_alignment_by_market": {
+      "上市": {
+        "index_code": "TAIEX",
+        "latest_effective_date": "2026-10-15",
+        "latest_valid_effective_date": "2026-10-15",
+        "aligned_to_scan_date": true,
+        "window_point_count": 6,
+        "window_valid_point_count": 6
+      },
+      "上櫃": {
+        "index_code": "TPEX",
+        "latest_effective_date": "2026-10-15",
+        "latest_valid_effective_date": "2026-10-15",
+        "aligned_to_scan_date": true,
+        "window_point_count": 6,
+        "window_valid_point_count": 6
+      }
+    },
+    "policy_version": "group_calendar_risk_order_flow_v4",
+    "history_qualification": {
+      "calendar_verified": true,
+      "expected_21_session_dates": [
+        "2026-09-14",
+        "2026-09-15",
+        "2026-09-16",
+        "2026-09-17",
+        "2026-09-18",
+        "2026-09-21",
+        "2026-09-22",
+        "2026-09-23",
+        "2026-09-24",
+        "2026-09-29",
+        "2026-09-30",
+        "2026-10-01",
+        "2026-10-02",
+        "2026-10-05",
+        "2026-10-06",
+        "2026-10-07",
+        "2026-10-08",
+        "2026-10-12",
+        "2026-10-13",
+        "2026-10-14",
+        "2026-10-15"
+      ],
+      "complete_21_session_quotes_by_market": {
+        "上市": 0,
+        "上櫃": 0
+      }
+    },
+    "source_collection_status": "data_review_required",
+    "source_issues": [
+      "上市當日有 2 檔行情列的收盤缺值、非正或同日互異；未計入有效價格覆蓋，仍視為未知",
+      "上市當日有有效收盤且成交量大於零，但已接入法人來源中未見同日資料 5 檔；此缺列保持未知，不補成零買賣超",
+      "上櫃當日有有效收盤且成交量大於零，但已接入法人來源中未見同日資料 95 檔；此缺列保持未知，不補成零買賣超"
+    ]
+  },
+  "candidate_count": 0,
+  "family_counts": {},
+  "directions": {},
+  "candidates": [],
+  "preview": [
+    {
+      "title": "📡 台股收盤訊號｜2026/10/15｜部分來源待核",
+      "description": "已依本輪有效資料判讀，沒有股票同時達到至少 3 個有方向的資料家族。各缺列只略過對應股票／來源，詳見覆蓋與具體缺項；未達候選門檻不等於沒有法人交易，也不代表偏空。",
+      "color": 3426654,
+      "fields": [
+        {
+          "name": "上市/上櫃資料覆蓋",
+          "value": "上市：收盤行情 1,048/1,054 檔 (99.4%)｜同日可判讀法人 1,043/1,054 檔 (99.0%)｜該日行情列 1,050 檔、無效收盤 2 檔、已知零成交 0 檔｜有成交但法人同日缺列 5 檔（未知）\n上櫃：收盤行情 872/894 檔 (97.5%)｜同日可判讀法人 777/894 檔 (86.9%)｜該日行情列 878 檔、無效收盤 0 檔、已知零成交 6 檔｜有成交但法人同日缺列 95 檔（未知）\n缺少證券列保持未知，不補成零；來源狀態的覆蓋門檻分上市/上櫃檢查。\n官方市場基準：上市 TAIEX：資料列日 2026\\-10\\-15；近六點有效 6/6；上櫃 TPEX：資料列日 2026\\-10\\-15；近六點有效 6/6\n來源狀態：已依可用資料判讀；部分來源缺列或日期待核",
+          "inline": false
+        },
+        {
+          "name": "來源批次問題／覆蓋檢查",
+          "value": "上市當日有 2 檔行情列的收盤缺值、非正或同日互異；未計入有效價格覆蓋，仍視為未知\n上市當日有有效收盤且成交量大於零，但已接入法人來源中未見同日資料 5 檔；此缺列保持未知，不補成零買賣超\n上櫃當日有有效收盤且成交量大於零，但已接入法人來源中未見同日資料 95 檔；此缺列保持未知，不補成零買賣超",
+          "inline": false
+        },
+        {
+          "name": "期交所法人期貨／選擇權部位（市場背景；不計分）",
+          "value": "指數期貨：尚未收集；缺資料不視為零部位。\n臺指選擇權：尚未收集；缺資料不視為零部位。\n期貨大額交易人：尚未收集；缺資料不視為零部位。\n三類法人是多機構彙總；選擇權多腿策略不等於單純看多/看空。大額交易人買/賣兩側分開排名，不能相減成淨部位。僅作市場背景，不計個股方向分數。\n來源：[TAIFEX 官方 OpenAPI](https://openapi.taifex.com.tw/)｜[期貨法人欄位](https://www.taifex.com.tw/cht/3/futContractsDate)｜[選擇權買權/賣權統計](https://www.taifex.com.tw/cht/3/callsAndPutsDate)｜[大額交易人開放資料 11337](https://data.gov.tw/dataset/11337)",
+          "inline": false
+        },
+        {
+          "name": "上櫃市場現股當沖彙總（官方市場背景；不計分）",
+          "value": "上櫃市場當沖彙總截至 2026/10/15 尚無可用列；缺資料不代表零當沖量。本來源只有 TPEx 市場彙總，不代表上市市場或個股。",
+          "inline": false
+        },
+        {
+          "name": "上市/上櫃市場總報酬（官方背景；不計分）",
+          "value": "上市 官方報酬指數：尚無可用資料日；不推定市場報酬為零。\n上櫃 官方報酬指數：尚無可用資料日；不推定市場報酬為零。\n只作市場背景、不加入個股分數；TWSE 資料集說明配股配息再投資，TPEx 資料依官方『報酬指數』欄位呈現。來源由自然批次累積，缺值不補零。\n來源：[TWSE 11871](https://data.gov.tw/dataset/11871)｜[TPEx 20219](https://data.gov.tw/dataset/20219)",
+          "inline": false
+        },
+        {
+          "name": "市場廣度背景（官方個股漲跌欄；不計入分數）",
+          "value": "上市：沒有與 2026/10/15 同日的已接受開放行情（缺資料，不當作零漲跌）；目前市場主檔分母未提供。\n上櫃：沒有與 2026/10/15 同日的已接受開放行情（缺資料，不當作零漲跌）；目前市場主檔分母未提供。\n母體為當日行情與目前證券主檔的 CFI ES* 交集，並非 TWSE『股票』彙總口徑；只作市場背景。\n接受行情代碼/目前主檔數只顯示列報範圍；差額可能含停牌、無交易或採集缺列，未逐一辨識，不補成零成交或持平。\n來源：[TWSE 開放個股日成交資訊](https://data.gov.tw/dataset/11549)｜[TPEx 開放上櫃行情](https://data.gov.tw/dataset/11370)",
+          "inline": false
+        },
+        {
+          "name": "達觀察門檻的名單分布",
+          "value": "🟢 偏多 **0**　🔴 偏空 **0**　🟡 分歧 **0**",
+          "inline": false
+        },
+        {
+          "name": "怎麼讀",
+          "value": "至少 3 個有效資料家族有方向才入列；多空依家族票數差判定，平手列為分歧。名單分布只計入達門檻候選，不是全市場漲跌家數；未上榜不代表看空。",
+          "inline": false
+        }
+      ],
+      "footer": {
+        "text": "資料截至 2026/10/15｜本則顯示偏多 0 檔、風險/分歧 0 檔｜符合門檻名單已顯示"
+      }
+    },
+    {
+      "title": "法人與分點來源覆蓋",
+      "color": 3426654,
+      "description": "使用當時已收的資料，完整 1／3／5 交易日視窗各自判斷；缺資料略過，不補成零。",
+      "fields": [
+        {
+          "name": "法人來源說明",
+          "value": "上市法人已納入判讀：資料日 2026-10-15；同日已收 1,044/1,054 檔、可判讀 1,043 檔、達多空條件 578 檔。完整三／五日 1,039/1,027 檔。有成交但缺同日法人列 5 檔。\n版本留存 0 檔；僅有入庫時間 1,044 檔。規則已執行，預測成效仍待跨日期驗證。\n上市券商分點：最新資料日 2026-10-14；同日已收 0 檔、可判讀 0 檔、達集中度條件 0 檔。\n上櫃法人已納入判讀：資料日 2026-10-15；同日已收 777/894 檔、可判讀 777 檔、達多空條件 256 檔。完整三／五日 716/685 檔。有成交但缺同日法人列 95 檔。\n版本留存 777 檔；僅有入庫時間 0 檔。規則已執行，預測成效仍待跨日期驗證。\n上櫃券商分點買賣資料未收集，只略過上櫃分點訊號；法人照常判讀。",
+          "inline": false
+        }
+      ]
+    }
+  ],
+  "preview_request_bytes": [
+    8336,
+    2113
+  ]
+}

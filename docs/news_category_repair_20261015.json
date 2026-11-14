@@ -1,0 +1,22 @@
+{
+  "status": "prepared_exact_before_image",
+  "source": "ETtoday",
+  "id": 19029909,
+  "article_id": "3254811",
+  "article_url": "https://esg.ettoday.net/news/3254811",
+  "create_time_tpe": "2026-10-15 10:39:49",
+  "old_updated_at": "2026-10-15 02:39:45",
+  "old_category": "ETtoday\n\n\nET ESG 永續雲\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nGO",
+  "new_category": "ET ESG 永續雲",
+  "basis": "Isolate the sole publisher logo label and remove ETtoday/GO navigation tokens; retain full before-image before the one-row optimistic update.",
+  "before_snapshot": {
+    "id": 19029909,
+    "source": "ETtoday",
+    "article_id": "3254811",
+    "article_url": "https://esg.ettoday.net/news/3254811",
+    "category": "ETtoday\n\n\nET ESG 永續雲\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nGO",
+    "create_time": "2026-10-15 10:39:49",
+    "created_at": "2026-10-15 01:07:00",
+    "updated_at": "2026-10-15 02:39:45"
+  }
+}

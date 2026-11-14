@@ -1,0 +1,1055 @@
+--- a/dags/source_extension/equity_order_flow.py
++++ b/dags/source_extension/equity_order_flow.py
+@@ -1,7 +1,6 @@
+-"""Institutional flow readiness and broker concentration as of each scan.
+-
+-Institutional flow remains context/shadow-only pending multi-date outcome review.
+-Legacy institutional tables are excluded; current vote thresholds are not enabled.
++"""Evaluate stored institutional flow and available branch data at scan cutoff.
++
++Source availability, rule triggers and historical performance are separate facts.
+ """
+ from __future__ import annotations
+ 
+@@ -13,7 +12,7 @@
+ from source_extension.adapters import parse_number
+ from source_extension.institutional_flow import FLOW_ASOF_SQL, TPEX_FLOW_SOURCE, _date, _flow_values
+ 
+-RULE_VERSION = "equity_order_flow_v1"
++RULE_VERSION = "equity_order_flow_v2"
+ INSTITUTION_MIN_NET_SHARES = 100_000
+ INSTITUTION_INTENSITY_PCT = {1: 10.0, 3: 5.0, 5: 5.0}
+ BROKER_CONCENTRATION_PCT = {1: 20.0, 3: 15.0, 5: 15.0}
+@@ -66,11 +65,13 @@
+ 
+ def select_institutional_observations(official_rows, legacy_rows=(), *, master,
+                                       as_of_date, cutoff_utc):
+-    """Select only approved OTC feed rows; never use legacy rows as fallback."""
++    """Prefer versioned OTC data; also read the existing two-market stock table.
++
++    Stored rows certify collection-time availability, not immutable PIT vintages.
++    An explicit bad official revision blocks fallback for that security/date.
++    """
+     official = defaultdict(list)
+     rejected = Counter()
+-    if legacy_rows:
+-        rejected["legacy_source_not_authorized"] += len(legacy_rows)
+     for row in official_rows:
+         code = str(row.get("entity_id") or "").strip()
+         day = _date(row.get("effective_date"))
+@@ -102,6 +103,32 @@
+             "captured_at": row["captured_at"].isoformat(), "capture_basis": basis,
+             "natural_pit": natural, "foreign_component_basis": foreign_basis,
+         }
++    stored = defaultdict(list)
++    for row in legacy_rows:
++        code, day = str(row.get("code") or "").strip(), _date(row.get("date"))
++        capture = row.get("captured_at")
++        if (code not in master or master[code]["market"] not in ("上市", "上櫃")
++                or not day or day > as_of_date or not isinstance(capture, dt.datetime)
++                or capture > cutoff_utc):
++            continue
++        if (code, day) not in official:
++            stored[(code, day)].append(row)
++    for (code, day), rows in stored.items():
++        values = tuple(_finite(rows[0].get(k)) for k in ("total", "foreign", "trust", "dealer"))
++        if (len(rows) != 1 or any(v is None or not v.is_integer() for v in values)
++                or values[0] != sum(values[1:])):
++            rejected["stored_quality_or_duplicate"] += 1
++            continue
++        listed = master[code]["market"] == "上市"
++        selected[code][day] = {
++            "total": values[0], "foreign": values[1], "trust": values[2], "dealer": values[3],
++            "source_key": "twse_t86_stored" if listed else "tpex_daily_trade_stored",
++            "source_url": ("https://www.twse.com.tw/zh/trading/foreign/t86.html"
++                           if listed else TPEX_FLOW_URL),
++            "effective_date": day.isoformat(), "captured_at": rows[0]["captured_at"].isoformat(),
++            "capture_basis": "stored_collection_time", "natural_pit": False,
++            "foreign_component_basis": "stored_components_reconciled_to_total",
++        }
+     return dict(selected), dict(rejected)
+ 
+ 
+@@ -133,9 +160,8 @@
+     if not sessions or sessions[-1] != as_of_date:
+         return {
+             "direction": 0, "vote_enabled": False,
+-            "status": "direction_disabled_pending_validation",
+-            "shadow_direction": 0, "shadow_status": "session_calendar_unavailable",
+-            "selected_window": None, "shadow_selected_window": None, "windows": {},
++            "status": "session_calendar_unavailable", "same_day_usable": False,
++            "selected_window": None, "windows": {},
+             "rule_version": RULE_VERSION,
+             "latest_observation": observations.get(as_of_date),
+         }
+@@ -154,29 +180,24 @@
+         # the institutional family when foreign + trust trades oppose it.
+         professional_alignment = (totals["foreign"] + totals["trust"]) * sign > 0
+         natural_pit_complete = all(bool(row.get("natural_pit")) for row in panel)
+-        shadow_direction = sign if (
+-            natural_pit_complete and persistence and professional_alignment
++        direction = sign if (
++            persistence and professional_alignment
+             and abs(totals["total"]) >= INSTITUTION_MIN_NET_SHARES
+             and abs(intensity) >= threshold
+         ) else 0
+         windows[str(size)] = {
+             "days": size, "dates": [d.isoformat() for d in dates], **totals,
+             "net_intensity_pct": round(intensity, 4), "same_sign_days": same_sign,
+-            "direction": 0, "shadow_direction": shadow_direction,
++            "direction": direction,
+             "natural_pit_complete": natural_pit_complete, "volume_shares": volume,
+             "sources": sorted({r["source_key"] for r in panel}),
+             "capture_bases": sorted({r["capture_basis"] for r in panel}),
+             "foreign_trust_aligned": professional_alignment,
+         }
+-    shadow_windows = {
+-        key: {**window, "direction": window["shadow_direction"]}
+-        for key, window in windows.items()
+-    }
+-    shadow_direction, shadow_chosen, shadow_status = _choose_window(shadow_windows)
+-    return {"direction": 0, "vote_enabled": False,
+-            "status": "direction_disabled_pending_validation",
+-            "shadow_direction": shadow_direction, "shadow_status": shadow_status,
+-            "selected_window": None, "shadow_selected_window": shadow_chosen,
++    direction, chosen, status = _choose_window(windows)
++    return {"direction": direction, "vote_enabled": bool(windows),
++            "status": status, "same_day_usable": "1" in windows,
++            "selected_window": chosen,
+             "windows": windows, "rule_version": RULE_VERSION,
+             "latest_observation": observations.get(as_of_date)}
+ 
+@@ -264,6 +285,7 @@
+     direction, chosen, status = _choose_window(windows)
+     return {"direction": direction, "status": status, "selected_window": chosen,
+             "windows": windows, "rule_version": RULE_VERSION, "source_url": BROKER_URL,
++            "latest_effective_date": max(panels).isoformat() if panels else None,
+             "same_day_panel_available": as_of_date in panels,
+             "same_day_usable": as_of_date in valid_panels, "rejected_date_counts": dict(rejected)}
+ 
+@@ -295,8 +317,14 @@
+     names = ("record_hash", "entity_id", "effective_date", "quality_status", "unit", "value_text",
+              "captured_at", "capture_basis", "dag_id", "dag_run_id", "successful_source_run")
+     official = [dict(zip(names, row)) for row in source_cursor.fetchall()]
++    stock_cursor.execute("""SELECT TRIM(證券代號),資料日期,三大法人買賣超股數,
++        外資買賣超股數,投信買賣超股數,自營商買賣超股數,create_time
++        FROM 三大法人買賣 WHERE 資料日期 BETWEEN %s AND %s AND create_time<=%s""",
++                         (floor, as_of_date, cutoff_utc))
++    names = ("code", "date", "total", "foreign", "trust", "dealer", "captured_at")
++    stored_rows = [dict(zip(names, row)) for row in stock_cursor.fetchall()]
+     observations, inst_rejected = select_institutional_observations(
+-        official, (), master=master, as_of_date=as_of_date, cutoff_utc=cutoff_utc)
++        official, stored_rows, master=master, as_of_date=as_of_date, cutoff_utc=cutoff_utc)
+     stock_cursor.execute("""SELECT TRIM(證券代號),資料日期,券商代號,券商名稱,
+         買量,賣量,買賣超,資料類型,create_time FROM 券商進出總表
+         WHERE 資料日期 BETWEEN %s AND %s AND create_time<=%s AND 資料類型='分點'""",
+@@ -309,13 +337,7 @@
+     for code, info in master.items():
+         sessions = session_dates_by_market.get(info["market"], set())
+         inst = institutional_signal(observations.get(code, {}), price_rows_by_code.get(code, []), sessions, as_of_date)
+-        if info["market"] == "上市":
+-            inst.update(
+-                status="source_not_authorized", vote_enabled=False,
+-                shadow_direction=0,
+-                blocking_reasons=["authorized_listed_bulk_source_missing"],
+-            )
+-        elif as_of_date not in observations.get(code, {}):
++        if as_of_date not in observations.get(code, {}):
+             inst["status"] = "same_day_data_unavailable"
+         broker = (broker_signal(panels.get(code, {}), price_rows_by_code.get(code, []), sessions, as_of_date)
+                   if info["market"] == "上市" else {"direction": 0, "status": "source_unavailable_skipped", "windows": {}})
+@@ -324,20 +346,19 @@
+         codes = {code for code, info in master.items() if info["market"] == market}
+         available = {code for code in codes if as_of_date in observations.get(code, {})}
+         traded = {code for code in codes if as_of_date in _price_panel(price_rows_by_code.get(code, []))}
+-        shadow_candidates = {
++        qualified = {
+             code for code in codes
+-            if contexts[code]["institutions"].get("shadow_direction")
+-        }
+-        shadow_window_ready = {
++            if contexts[code]["institutions"].get("direction")
++        }
++        usable = {
+             code for code in codes
+             if "1" in contexts[code]["institutions"].get("windows", {})
+         }
+         broker = {
+             "status": "available_subset" if market == "上市" else "source_unavailable_skipped",
+-            "same_day_count": sum(
+-                str(row["code"]).strip() in codes and _date(row["date"]) == as_of_date
+-                for row in broker_rows
+-            ) if market == "上市" else None,
++            "same_day_count": len({str(row["code"]).strip() for row in broker_rows
++                if str(row["code"]).strip() in codes and _date(row["date"]) == as_of_date
++            }) if market == "上市" else None,
+             "accepted_panel_count": sum(
+                 bool(contexts[code]["broker_branches"].get("same_day_panel_available"))
+                 for code in codes
+@@ -351,49 +372,36 @@
+                 for code in codes
+             ) if market == "上市" else None,
+             "rejected_panel_counts": broker_rejected if market == "上市" else {},
++            "latest_effective_date": max(
++                (_date(row["date"]) for row in broker_rows if str(row["code"]).strip() in codes),
++                default=None,
++            ).isoformat() if any(str(row["code"]).strip() in codes for row in broker_rows) else None,
+         }
+         expected_sessions = [
+             day.isoformat() for day in sorted(session_dates_by_market.get(market, set()))[-5:]
+         ]
+-        if market == "上市":
+-            readiness[market] = {
+-                "rule_version": RULE_VERSION, "status": "source_not_authorized",
+-                "source_key": None, "vote_enabled": False,
+-                "source_available_count": None, "same_day_count": None,
+-                "direction_usable_count": 0, "qualified_vote_count": 0,
+-                "shadow_direction_candidate_count": 0,
+-                "five_session_ready_count": None, "three_session_ready_count": None,
+-                "natural_pit_same_day_count": None,
+-                "traded_without_source_count": None,
+-                "latest_effective_date": None, "source_counts": {},
+-                "expected_session_dates": expected_sessions,
+-                "calendar_verified": calendar_verified,
+-                "broker": broker,
+-                "blocking_reasons": ["authorized_listed_bulk_source_missing"],
+-                "rejected_institution_counts": inst_rejected,
+-                "cutoff_utc": cutoff_utc.isoformat(),
+-                "performance_status": "forward_outcomes_pending",
+-            }
+-            continue
+         readiness[market] = {
+             "rule_version": RULE_VERSION,
+-            "status": "context_only_validation_pending" if available else "same_day_data_unavailable",
+-            "source_key": TPEX_FLOW_SOURCE, "vote_enabled": False,
++            "status": "evaluated" if available else "same_day_data_unavailable",
++            "source_key": "twse_t86_stored" if market == "上市" else TPEX_FLOW_SOURCE,
++            "vote_enabled": bool(usable),
+             "same_day_count": len(available), "source_available_count": len(available),
+-            "direction_usable_count": 0, "qualified_vote_count": 0,
+-            "shadow_direction_candidate_count": len(shadow_candidates),
+-            "shadow_window_ready_count": len(shadow_window_ready),
++            "direction_usable_count": len(usable), "qualified_vote_count": len(qualified),
+             "five_session_ready_count": sum("5" in contexts[c]["institutions"]["windows"] for c in codes),
+             "three_session_ready_count": sum("3" in contexts[c]["institutions"]["windows"] for c in codes),
+             "natural_pit_same_day_count": sum(observations[c][as_of_date]["natural_pit"] for c in available),
+             "traded_without_source_count": len(traded - available),
+-            "latest_effective_date": as_of_date.isoformat() if available else None,
++            "latest_effective_date": max(
++                (day for c in codes for day in observations.get(c, {})), default=None
++            ).isoformat() if any(observations.get(c) for c in codes) else None,
+             "source_counts": dict(Counter(observations[c][as_of_date]["source_key"] for c in available)),
+             "expected_session_dates": expected_sessions,
+             "calendar_verified": calendar_verified,
+             "broker": broker,
+-            "blocking_reasons": ["multi_date_outcome_validation_pending"],
++            "blocking_reasons": [] if available else ["same_day_records_missing"],
+             "rejected_institution_counts": inst_rejected, "cutoff_utc": cutoff_utc.isoformat(),
+-            "performance_status": "forward_outcomes_pending",
++            "performance_status": "rules_active_predictive_performance_unvalidated",
++            "stored_collection_time_count": sum(
++                observations[c][as_of_date]["capture_basis"] == "stored_collection_time" for c in available),
+         }
+     return contexts, readiness
+--- a/dags/source_extension/institutional_flow.py
++++ b/dags/source_extension/institutional_flow.py
+@@ -145,11 +145,11 @@
+         universe = {code for code, info in master.items() if info["market"] == market}
+         if source_key is None:
+             result[market] = {
+-                "source_key": None, "status": "source_not_authorized",
++                "source_key": None, "status": "stored_source_not_assessed",
+                 "source_available_count": None, "same_day_count": None,
+                 "natural_pit_same_day_count": None, "five_session_ready_count": None,
+-                "traded_without_source_count": None, "vote_enabled": False,
+-                "blocking_reasons": ["authorized_listed_bulk_source_missing"],
++                "traded_without_source_count": None, "vote_enabled": None,
++                "blocking_reasons": ["this_audit_only_reads_official_tpex_feed"],
+             }
+             continue
+         same_day = {code for code, period in valid if period == as_of_date} & universe
+@@ -189,7 +189,7 @@
+                 "trust_net_shares_5d": sum(values[2] for values in panel),
+                 "dealer_net_shares_5d": sum(values[3] for values in panel),
+             }
+-        reasons = ["multi_date_outcome_validation_pending"]
++        reasons = []
+         if not calendar_complete:
+             reasons.append("five_market_session_calendar_unavailable")
+         if not same_day:
+@@ -200,7 +200,7 @@
+             reasons.append("five_session_flow_price_panel_incomplete")
+         result[market] = {
+             "source_key": source_key,
+-            "status": "context_only_validation_pending" if eligible else "insufficient_history",
++            "status": "official_feed_observed" if eligible else "insufficient_history",
+             "latest_effective_date": latest_date.isoformat() if latest_date else None,
+             "source_available_count": len(latest_codes & universe),
+             "source_latest_row_count": sum(period == latest_date for _, period in grouped),
+@@ -213,7 +213,8 @@
+             "calendar_verified": calendar_complete,
+             "five_session_ready_count": len(eligible),
+             "shadow_observations_5d": eligible,
+-            "vote_enabled": False, "blocking_reasons": reasons,
++            "vote_enabled": None, "blocking_reasons": reasons,
++            "direction_evaluation": "handled_by_equity_order_flow",
+             "rejected_key_counts": dict(rejected),
+             "as_of_date": as_of_date.isoformat(),
+             "cutoff_utc": cutoff_utc.isoformat(),
+@@ -260,6 +261,31 @@
+ 
+ 
+ def format_flow_readiness(market: str, readiness: dict[str, Any], universe_count: int) -> str:
++    if readiness.get("rule_version") == "equity_order_flow_v2":
++        available = int(readiness.get("same_day_count") or 0)
++        usable = int(readiness.get("direction_usable_count") or 0)
++        triggered = int(readiness.get("qualified_vote_count") or 0)
++        broker = readiness.get("broker") or {}
++        broker_text = (
++            "上櫃券商分點買賣資料未收集，只略過上櫃分點訊號；法人照常判讀。"
++            if market == "上櫃" else
++            f"上市券商分點：最新資料日 {broker.get('latest_effective_date') or '未取得'}；"
++            f"同日已收 {int(broker.get('same_day_count') or 0):,} 檔、"
++            f"可判讀 {int(broker.get('direction_usable_count') or 0):,} 檔、"
++            f"達集中度條件 {int(broker.get('qualified_vote_count') or 0):,} 檔。"
++        )
++        return (
++            f"{market}法人{'已納入判讀' if available else '本次缺同日列'}："
++            f"資料日 {readiness.get('latest_effective_date') or '未取得'}；"
++            f"同日已收 {available:,}/{universe_count:,} 檔、可判讀 {usable:,} 檔、"
++            f"達多空條件 {triggered:,} 檔。完整三／五日 "
++            f"{int(readiness.get('three_session_ready_count') or 0):,}/"
++            f"{int(readiness.get('five_session_ready_count') or 0):,} 檔。"
++            f"有成交但缺同日法人列 {int(readiness.get('traded_without_source_count') or 0):,} 檔。\n"
++            f"版本留存 {int(readiness.get('natural_pit_same_day_count') or 0):,} 檔；"
++            f"僅有入庫時間 {int(readiness.get('stored_collection_time_count') or 0):,} 檔。"
++            "規則已執行，預測成效仍待跨日期驗證。\n" + broker_text
++        )
+     if readiness.get("rule_version") == "equity_order_flow_v1":
+         broker = readiness.get("broker") or {}
+         broker_text = (
+@@ -270,7 +296,7 @@
+         )
+         if readiness.get("status") == "source_not_authorized":
+             return (
+-                f"{market}法人：缺已授權全市場批次來源；買賣超未知、法人方向未啟用。\n"
++                f"{market}法人：這份歷史 v1 快照當時未讀入既有法人表；請勿作為目前來源現況。\n"
+                 f"{broker_text}"
+             )
+         return (
+@@ -278,11 +304,11 @@
+             f"自然 PIT {readiness.get('natural_pit_same_day_count', 0):,} 檔；完整三／五日面板 "
+             f"{readiness.get('three_session_ready_count', 0):,}/{readiness.get('five_session_ready_count', 0):,} 檔。"
+             f"影子方向條件符合 {readiness.get('shadow_direction_candidate_count', 0):,} 檔；"
+-            "家族方向尚待多日期成熟成效驗證，現在不投票；缺列仍是未知。\n"
++            "此為歷史 v1 停用政策的紀錄；目前政策請看新快照。\n"
+             f"\n{broker_text}"
+         )
+-    if readiness.get("status") == "source_not_authorized":
+-        return f"{market}法人：缺已授權全市場批次來源；買賣超未知；方向未啟用。"
++    if readiness.get("status") in {"source_not_authorized", "stored_source_not_assessed"}:
++        return f"{market}法人：此來源版本稽核未讀取既有股票表；已收與判讀數請看整合法人／分點快照。"
+     if not readiness:
+         return f"{market}法人：歷史快照未保存來源資格分項；0 票不能當成零買賣超。"
+     dates = readiness.get("observed_effective_dates") or []
+@@ -292,5 +318,5 @@
+         f"自然 PIT {readiness.get('natural_pit_same_day_count', 0):,} 檔；"
+         f"已存 {len(dates)} 個有效日；五交易日與成交對齊 "
+         f"{readiness.get('five_session_ready_count', 0):,} 檔。"
+-        "方向未啟用（待多日期成效驗證）；資料缺列仍為未知。"
++        "此欄只稽核來源版本；多空條件由整合法人／分點規則判讀。"
+     )
+--- a/dags/source_extension/market_signals.py
++++ b/dags/source_extension/market_signals.py
+@@ -25,7 +25,7 @@
+ from source_extension.equity_order_flow import load_equity_order_flow
+ from source_extension.signal_policy import (
+     POLICY_VERSION, evidence_balance, is_observed_market_session, profitability_vote,
+-    quote_window, revenue_period_current,
++    merge_stored_quote_history, quote_window, revenue_period_current,
+     strip_negated_terms, trading_risk_action, trading_sessions,
+ )
+ from source_extension.registry import _open_connection
+@@ -1482,6 +1482,7 @@
+     cursor, *, start_date: dt.date, end_date: dt.date,
+     observed_at: dt.datetime, source_updated_at_cutoff: dt.datetime,
+     entity_ids: set[str] | None = None,
++    known_quote_keys: set[tuple[str, str, dt.date]] | None = None,
+ ) -> list[tuple[str, str, dt.date, float | None, float | None, bool]]:
+     """Read only exchange-approved, point-in-time daily quote snapshots."""
+ 
+@@ -1499,14 +1500,14 @@
+         entity_params = entity_values
+     cursor.execute(
+         MARKET_CONTEXT_ASOF_CTE + """
+-        SELECT source_key, entity_id, effective_date, value_text
++        SELECT source_key, entity_id, effective_date, value_text, quality_status
+         FROM market_context_snapshot
+         WHERE event_type='market_quote_daily' AND entity_type='stock'
+-          AND quality_status='ok'
+           AND source_key IN ('twse_equity_quotes_daily', 'tpex_equity_quotes_daily')
+           AND effective_date>=%s AND effective_date<=%s
+           AND (event_time IS NULL OR event_time<=%s)
+-        """ + entity_filter + " ORDER BY effective_date, entity_id, id",
++        """ + (" AND quality_status='ok'" if known_quote_keys is None else "")
++        + entity_filter + " ORDER BY effective_date, entity_id, id",
+         (
+             source_updated_at_cutoff, source_updated_at_cutoff,
+             source_updated_at_cutoff, source_updated_at_cutoff,
+@@ -1516,10 +1517,14 @@
+     quote_rows: list[
+         tuple[str, str, dt.date, float | None, float | None, bool]
+     ] = []
+-    for source_key, entity_id, effective_date, value_text in cursor.fetchall():
++    for source_key, entity_id, effective_date, value_text, quality_status in cursor.fetchall():
+         code = _normalize_code(entity_id)
+         period = _date_only(effective_date)
+         if not code or not period:
++            continue
++        if known_quote_keys is not None:
++            known_quote_keys.add((str(source_key), code, period))
++        if quality_status != "ok":
+             continue
+         try:
+             details = json.loads(value_text) if isinstance(value_text, str) else value_text
+@@ -1559,12 +1564,14 @@
+         for row in master_rows
+         if row and row[0]
+     }
++    known_quote_keys: set[tuple[str, str, dt.date]] = set()
+     official_quote_rows = _load_official_market_quote_rows(
+         source_cursor,
+         start_date=today - dt.timedelta(days=90),
+         end_date=today,
+         observed_at=started_at,
+         source_updated_at_cutoff=source_updated_at_cutoff,
++        known_quote_keys=known_quote_keys,
+     )
+     as_of_date = max((row[2] for row in official_quote_rows), default=None)
+     prices_by_code: dict[
+@@ -1584,6 +1591,18 @@
+             prices_by_code.setdefault(key, []).append(
+                 (trade_date, _number(close), _number(volume), no_trade)
+             )
++
++    stored_history_points_by_code = {}
++    if as_of_date:
++        stock_cursor.execute("""SELECT TRIM(證券代號),資料日期,收盤,成交量,create_time
++            FROM 個股成交資訊 WHERE 資料日期 BETWEEN %s AND %s AND create_time<=%s""",
++            (as_of_date - dt.timedelta(days=45), as_of_date, source_updated_at_cutoff))
++        stored_history = [dict(zip(("code", "date", "close", "volume_lots", "captured_at"), row))
++                          for row in stock_cursor.fetchall()]
++        prices_by_code, stored_history_points_by_code = merge_stored_quote_history(
++            prices_by_code, stored_history, master=master, cutoff_utc=source_updated_at_cutoff,
++            known_quote_keys={(code, day) for key, code, day in known_quote_keys
++                              if code in master and key == OFFICIAL_MARKET_QUOTE_SOURCE_BY_MARKET.get(master[code]['market'])})
+ 
+     # Use the scanner's actual market-wide quote dates to validate multi-session
+     # positioning comparisons. A fixed row offset can span a missing session or
+@@ -2393,8 +2412,7 @@
+     fresh_price_data = bool(as_of_date and 0 <= price_age_days <= 7)
+     fresh_flow_codes = {
+         code for code, context in order_flow_by_code.items()
+-        if context["institutions"].get("vote_enabled")
+-        and context["institutions"].get("direction")
++        if context["institutions"].get("same_day_usable")
+     }
+     fresh_flow_data = bool(fresh_flow_codes)
+     fresh_revenue_codes = set()
+@@ -2567,6 +2585,9 @@
+ 
+     candidates: list[dict[str, Any]] = []
+ 
++    family_trigger_counts: dict[str, int] = {}
++    candidate_filter_counts = {"evaluated_stocks": 0, "below_three_directional_families": 0}
++
+     if fresh_price_data:
+         for code, info in master.items():
+             rows = sorted(prices_by_code.get(code, []), key=lambda row: row[0])
+@@ -2597,6 +2618,8 @@
+             volumes = [row[2] for row in history_21]
+             price_context["calendar_verified"] = bool(expected_sessions)
+             price_context["continuous_21_session_history"] = bool(history_21)
++            price_context["stored_earlier_history_points"] = stored_history_points_by_code.get(code, 0)
++            price_context["stored_history_availability_basis"] = "collection_time_not_immutable_vintage"
+             action_dates = {_date_only(item.get("effective_date"))
+                             for item in corporate_action_by_code.get(code, [])}
+             recent_action = any(day in action_dates for day in expected_sessions[-21:])
+@@ -3100,7 +3123,11 @@
+                 family: direction for family, direction in family_directions.items()
+                 if direction != 0
+             }
++            candidate_filter_counts["evaluated_stocks"] += 1
++            for family in family_directions:
++                family_trigger_counts[family] = family_trigger_counts.get(family, 0) + 1
+             if len(family_directions) < 3:
++                candidate_filter_counts["below_three_directional_families"] += 1
+                 continue
+             group_balance = evidence_balance(family_directions)
+             direction = group_balance["direction"]
+@@ -3234,8 +3261,8 @@
+             )
+     if not fresh_flow_data:
+         market_coverage_issues.append(
+-            "法人方向家族未啟用：上市缺已授權全市場批次來源；上櫃官方資料只作來源、PIT 與影子診斷，"
+-            "待多日期成熟成效驗證後再評估方向票。flow_count=0 不代表淨買賣超為零。"
++            "本次沒有能與同日有效收盤及成交量對齊的法人列；"
++            "請查各市場已收、可判讀與缺列數。未達買賣超門檻本身不屬資料缺失。"
+         )
+     else:
+         for market, values in market_coverage_by_market.items():
+@@ -3292,6 +3319,8 @@
+         "benchmark_coverage": sorted(benchmark_windows),
+         "benchmark_alignment_by_market": benchmark_alignment_by_market,
+         "policy_version": POLICY_VERSION,
++        "family_trigger_counts": family_trigger_counts,
++        "candidate_filter_counts": candidate_filter_counts,
+         "history_qualification": {
+             "calendar_verified": bool(expected_sessions),
+             "expected_21_session_dates": [day.isoformat() for day in expected_sessions[-21:]],
+@@ -3299,6 +3328,10 @@
+                 market: sum(bool(quote_window(prices_by_code.get(code, []), expected_sessions, 21))
+                             for code, info in master.items() if info["market"] == market)
+                 for market in ("上市", "上櫃")
++            },
++            "stored_earlier_history_codes_by_market": {
++                market: sum(code in stored_history_points_by_code for code, info in master.items()
++                            if info["market"] == market) for market in ("上市", "上櫃")
+             },
+         },
+         "source_collection_status": source_collection,
+@@ -5328,7 +5361,7 @@
+         "title": f"{icons.get(direction, '⚪')} {code} {name}｜{direction}觀察",
+         "description": (
+             f"資料日 {date_label}｜至少 3 個有效資料家族有方向才列入觀察；"
+-            f"多空依家族票數差判定，平手列為分歧。\n{source_line}"
++            f"多空依資料群方向判定，同群不重複加權，平手列為分歧。\n{source_line}"
+         ),
+         "color": colors.get(direction, 0x5865F2),
+         "fields": [
+@@ -5347,7 +5380,9 @@
+             {"name": "相對市場/產業表現｜近 5 個交易日", "value": market_comparison, "inline": False},
+             {"name": "接下來怎麼看", "value": action, "inline": False},
+         ],
+-        "footer": {"text": "規則式觀察名單，不是買進建議、上漲機率或自動停損價"},
++        "footer": {"text": "規則式觀察名單，不是買進建議、上漲機率或自動停損價"
++                   + ("｜較早行情取既有股票表，依入庫時間限制，無不可變版本"
++                      if levels.get("stored_earlier_history_points") else "")},
+     }
+     if reference:
+         embed["fields"].append({"name": "價位觀察", "value": reference, "inline": False})
+@@ -5358,23 +5393,25 @@
+         latest = institutional.get("latest_observation") or {}
+         if latest:
+             if institutional.get("vote_enabled") and institutional.get("direction"):
+-                vote_note = "有方向票"
++                vote_note = "已達法人多空條件，納入本次判斷"
++            elif institutional.get("vote_enabled"):
++                vote_note = "已判讀，未達多空條件或短長期方向分歧"
+             else:
+-                vote_note = "僅背景／影子觀察；法人方向家族未啟用"
++                vote_note = "本檔缺同日有效行情或可對齊視窗，略過這一項"
+             pit_note = (
+                 "自然批次 PIT 已核對" if latest.get("natural_pit")
+-                else "自然批次 PIT 尚未核對"
++                else "依入庫時間限定當時可得；無不可變歷史版本"
+             )
+             lines.append(
+                 f"法人資料日 {latest.get('effective_date') or '未知'}，淨額 "
+                 f"{float(latest.get('total') or 0) / 1000:+,.0f} 張；"
+                 f"[來源]({latest.get('source_url')})｜{vote_note}（{pit_note}）。"
+             )
+-            lines.append("自營商含避險，不單獨推定投資看法；影子條件不增加候選分數或方向家族。")
++            lines.append("自營商含避險；規則需併看外資與投信，並核對買賣超占成交量及連續性。")
+         elif institutional.get("status") == "source_not_authorized":
+-            lines.append("上市缺已授權全市場批次法人來源；買賣超未知，方向未啟用。")
++            lines.append("此為舊政策快照：當時未讀入既有上市法人表；不代表目前沒有法人資料。")
+         else:
+-            lines.append("同日官方法人資料缺列或無法核對成交；略過此家族，缺列不代表零買賣超。")
++            lines.append("本檔缺同日法人列或有效成交資料；只略過本檔這一項，缺列不填零。")
+         broker = order_flow.get("broker_branches") or {}
+         window = broker.get("selected_window") or (broker.get("windows") or {}).get("1")
+         if window:
+@@ -5389,9 +5426,16 @@
+                     lines.append(f"主要{label}分點：{branches}。")
+             lines.append("分點含客戶與自營交易，不代表法人身分或持倉成本；與法人證據可能重疊。")
+         elif broker.get("status") == "source_unavailable_skipped":
+-            lines.append("上櫃分點無可用來源，略過。")
++            lines.append("上櫃券商分點買賣資料未收集，只略過分點訊號，法人照常判讀。")
++        elif not broker.get("same_day_panel_available"):
++            lines.append(f"本檔上市分點最新可用日 {broker.get('latest_effective_date') or '未取得'}；"
++                         "缺本次同日面板，不以舊日資料冒充當日。")
+         else:
+-            lines.append("同日上市分點缺資料、成交口徑不符或量能不足，略過分點票。")
++            reasons = broker.get("rejected_date_counts") or {}
++            lines.append("上市分點已有同日面板；"
++                         + ("成交量未達 100 萬股或同日行情缺值，" if reasons.get("low_or_missing_trade_volume")
++                            else "分點買賣量與同日行情成交量口徑不符，")
++                         + "本檔不形成分點訊號。")
+         embed["fields"].insert(2, {"name": "法人與分點資料", "value": "\n".join(lines)[:1000], "inline": False})
+     if revenue_context_text:
+         embed["fields"].insert(
+@@ -6410,7 +6454,7 @@
+     source_status = str(run.get("source_status", "unknown"))
+     source_status_label = {
+         "fresh": "達最低資料檢查（仍非 100% 覆蓋）",
+-        "partial": "資料不足，不能由 0 候選推論沒有訊號",
++        "partial": "已依可用資料判讀；部分來源缺列或日期待核",
+         "unknown": "資料狀態未知，暫不可判讀",
+     }.get(source_status, "狀態未知")
+     shown_bullish = bullish[:min(DAILY_DIGEST_LIMIT, 6)]
+@@ -6457,7 +6501,7 @@
+                 f"｜有成交但法人同日缺列 {int(traded_without_flow):,} 檔（未知）"
+                 if traded_without_flow is not None and values.get("flow_readiness")
+                 else (
+-                    "｜法人來源未授權，缺列數不可判讀"
++                    "｜舊快照當時未讀入上市法人表，未保存逐檔缺列數"
+                     if (values.get("flow_readiness") or {}).get("status") == "source_not_authorized"
+                     else "｜歷史快照未留存同日法人來源缺列口徑"
+                 )
+@@ -6511,7 +6555,7 @@
+         coverage_value += "\n歷史快照未保存官方市場基準有效日。"
+     summary = {
+         "title": (
+-            f"⚠️ 資料不足｜台股收盤訊號｜{as_of}"
++            f"📡 台股收盤訊號｜{as_of}｜部分來源待核"
+             if source_status != "fresh"
+             else f"📡 台股收盤訊號｜{as_of}"
+         ),
+@@ -6559,7 +6603,7 @@
+         },
+     }
+     flow_embed = {
+-        "title": "法人與分點來源覆蓋",
++        "title": "法人與券商分點訊號判讀",
+         "color": 0x34495E,
+         "description": "使用當時已收的資料，完整 1／3／5 交易日視窗各自判斷；缺資料略過，不補成零。",
+         "fields": [{
+@@ -6571,6 +6615,17 @@
+             "inline": False,
+         }],
+     }
++    family_counts = run.get("family_trigger_counts")
++    if isinstance(family_counts, dict):
++        labels = {"price": "價格", "volume": "量能", "institutions": "法人",
++                  "broker_branches": "分點", "profitability": "季獲利率"}
++        summary["fields"].insert(1, {
++            "name": "已判讀並達各項多空條件的股票數",
++            "value": "；".join(f"{label} {int(family_counts.get(key) or 0):,} 檔"
++                               for key, label in labels.items())
++                     + "。這是各項訊號數；多項可能屬於同一股票，合併候選另需至少 3 個方向家族。",
++            "inline": False,
++        })
+     source_issues = [
+         str(issue).replace("\n", " ").strip()
+         for issue in (run.get("source_issues") or [])
+@@ -6676,16 +6731,16 @@
+             )
+         else:
+             summary["description"] = (
+-                "資料不足，這次無法確認全市場是否有符合條件的訊號。"
+-                "0 檔表示目前沒有可確認的候選，不代表沒有訊號或偏空；"
+-                "請先看下方來源問題與上市/上櫃覆蓋。"
++                "已依本輪有效資料判讀，沒有股票同時達到至少 3 個有方向的資料家族。"
++                "各缺列只略過對應股票／來源，詳見覆蓋與具體缺項；"
++                "未達候選門檻不等於沒有法人交易，也不代表偏空。"
+             )
+     elif not bullish:
+         summary["description"] = (
+             "本次沒有符合條件的偏多候選；以下列出偏空風險或方向分歧，僅供觀察。"
+         )
+     if source_status != "fresh" and parsed:
+-        summary["description"] += "\n⚠️ 來源未齊，名單反映目前可用資料，可能漏列。"
++        summary["description"] += "\n部分來源缺列或日期待核，已逐項列示；其餘有效訊號照常判讀。"
+ 
+     embeds = [summary, flow_embed]
+     displayed_bullish = 0
+@@ -7389,6 +7444,8 @@
+         if mode == "daily":
+             daily_run = {
+                 "as_of_date": as_of_date,
++                "family_trigger_counts": payload.get("family_trigger_counts"),
++                "candidate_filter_counts": payload.get("candidate_filter_counts"),
+                 "source_status": source_status,
+                 "universe_count": universe_count,
+                 "market_coverage_by_market": (
+--- a/dags/source_extension/signal_policy.py
++++ b/dags/source_extension/signal_policy.py
+@@ -3,16 +3,57 @@
+ from __future__ import annotations
+ 
+ import datetime as dt
++import math
+ import re
+-from collections import Counter
++from collections import Counter, defaultdict
+ 
+-POLICY_VERSION = "group_calendar_risk_revenue_context_v3"
++POLICY_VERSION = "group_calendar_risk_order_flow_v4"
+ FAMILY_GROUPS = {
+     "price": "market_tape", "volume": "market_tape",
+     "institutions": "equity_order_flow", "broker_branches": "equity_order_flow",
+     "profitability": "operating_margin",
+     "insiders": "insider_holdings",
+ }
++
++
++def merge_stored_quote_history(current, stored_rows, *, master, cutoff_utc, known_quote_keys=()):
++    """Use stored history where the current feed has no security/date record.
++
++    Stock-table volume is in lots; scanner volume is in shares. Collection-time
++    availability is retained separately from immutable source-feed versions.
++    """
++    result = {code: list(rows) for code, rows in current.items()}
++    boundaries = {}
++    known = set(known_quote_keys) | {(code, row[0]) for code, rows in current.items() for row in rows}
++    for code, rows in current.items():
++        market = master.get(code, {}).get("market")
++        if rows and market in ("上市", "上櫃"):
++            day = max(row[0] for row in rows)
++            boundaries[market] = max(day, boundaries.get(market, day))
++    grouped = defaultdict(list)
++    for row in stored_rows:
++        code = str(row.get("code") or "").strip()
++        market = master.get(code, {}).get("market")
++        day, captured = row.get("date"), row.get("captured_at")
++        if (not isinstance(day, dt.date) or isinstance(day, dt.datetime)
++                or market not in boundaries or day >= boundaries[market]
++                or (code, day) in known
++                or not isinstance(captured, dt.datetime) or captured > cutoff_utc):
++            continue
++        grouped[(code, day)].append(row)
++    provenance = Counter()
++    for (code, day), rows in grouped.items():
++        if len(rows) != 1:
++            continue
++        try:
++            close, volume = float(rows[0]["close"]), float(rows[0]["volume_lots"]) * 1000
++        except (KeyError, TypeError, ValueError):
++            continue
++        if not all(math.isfinite(value) and value > 0 for value in (close, volume)):
++            continue
++        result.setdefault(code, []).append((day, close, volume, False))
++        provenance[code] += 1
++    return {code: sorted(rows, key=lambda row: row[0]) for code, rows in result.items()}, dict(provenance)
+ 
+ 
+ def trading_sessions(as_of_date, closed_dates, lookback_days=60):
+--- /dev/null
++++ b/tests/test_order_flow_activation.py
+@@ -0,0 +1,108 @@
++"""Available institutional data must be read and evaluated, not policy-disabled."""
++import datetime as dt
++import json
++
++from source_extension.equity_order_flow import (
++    institutional_signal, load_equity_order_flow, select_institutional_observations,
++)
++from source_extension.institutional_flow import format_flow_readiness
++
++DAY = dt.date(2026, 10, 15)
++CUTOFF = dt.datetime(2026, 10, 15, 13)
++DAYS = [dt.date(2026, 10, d) for d in (8, 12, 13, 14, 15)]
++MASTER = {'2330': {'market': '上市'}, '3105': {'market': '上櫃'}}
++PRICES = [(day, 50., 1_000_000., False) for day in DAYS]
++
++
++def stored(day=DAY, code='2330', **updates):
++    return dict(code=code, date=day, total=300000, foreign=100000,
++                trust=200000, dealer=0, captured_at=CUTOFF-dt.timedelta(minutes=1),
++                **updates)
++
++
++def official(day=DAY, **updates):
++    row = dict(entity_id='3105', effective_date=day, quality_status='ok', unit='shares',
++               captured_at=CUTOFF-dt.timedelta(minutes=1), capture_basis='source_feed',
++               dag_id='source_extension_collect_after_close', dag_run_id='scheduled__test',
++               successful_source_run=True, value_text=json.dumps(dict(
++                   market='上櫃', three_institution_total_net_shares=300000,
++                   foreign_net_shares_excluding_foreign_dealers=100000,
++                   investment_trust_net_shares=200000, dealers_net_shares=0)))
++    row.update(updates)
++    return row
++
++
++def test_existing_listed_table_is_accepted_with_collection_time_provenance():
++    observations, rejected = select_institutional_observations([], [stored()], master=MASTER,
++        as_of_date=DAY, cutoff_utc=CUTOFF)
++    assert observations['2330'][DAY]['total'] == 300000
++    assert observations['2330'][DAY]['natural_pit'] is False
++    assert observations['2330'][DAY]['capture_basis'] == 'stored_collection_time'
++    assert not rejected
++
++
++def test_available_institutional_panel_votes_without_claiming_predictive_validation():
++    observations, _ = select_institutional_observations([], [stored(d) for d in DAYS],
++        master=MASTER, as_of_date=DAY, cutoff_utc=CUTOFF)
++    result = institutional_signal(observations.get('2330', {}), PRICES, DAYS, DAY)
++    assert result['vote_enabled'] is True
++    assert result['direction'] == 1
++    assert result['selected_window']['days'] == 5
++    assert result['selected_window']['natural_pit_complete'] is False
++
++
++def test_neutral_valid_data_is_readable_and_not_counted_as_a_missing_source():
++    rows = [dict(stored(d), total=0, foreign=-200000) for d in DAYS]
++    observations, _ = select_institutional_observations([], rows, master=MASTER,
++        as_of_date=DAY, cutoff_utc=CUTOFF)
++    result = institutional_signal(observations.get('2330', {}), PRICES, DAYS, DAY)
++    assert result['vote_enabled'] is True
++    assert result['direction'] == 0
++    assert result['status'] == 'below_threshold'
++
++
++def test_quarantine_is_not_hidden_by_stored_otc_fallback_and_bad_rows_stay_excluded():
++    observations, _ = select_institutional_observations([official(quality_status='quarantine')],
++        [stored(code='3105')], master=MASTER, as_of_date=DAY, cutoff_utc=CUTOFF)
++    assert '3105' not in observations
++    for bad in (dict(stored(), foreign=123), dict(stored(), total=None),
++                dict(stored(), captured_at=CUTOFF+dt.timedelta(seconds=1)),
++                stored(DAY+dt.timedelta(days=1))):
++        observations, _ = select_institutional_observations([], [bad], master=MASTER,
++            as_of_date=DAY, cutoff_utc=CUTOFF)
++        assert not observations
++    observations, _ = select_institutional_observations([], [stored(), stored()],
++        master=MASTER, as_of_date=DAY, cutoff_utc=CUTOFF)
++    assert not observations
++
++
++def test_both_markets_activate_and_missing_otc_branches_only_skips_that_component():
++    official_rows = [official(d) for d in DAYS]
++    class Sources:
++        def execute(self, sql, params): self.sql = sql
++        def fetchall(self):
++            if 'holiday.taiwan' in self.sql:
++                return [(DAY-dt.timedelta(days=i),) for i in range(45)
++                        if (DAY-dt.timedelta(days=i)).weekday() >= 5] + [(dt.date(2026,10,9),)]
++            return [(str(i), row['entity_id'], row['effective_date'], row['quality_status'],
++                row['unit'], row['value_text'], row['captured_at'], row['capture_basis'],
++                row['dag_id'], row['dag_run_id'], row['successful_source_run'])
++                for i,row in enumerate(official_rows)]
++    class Stocks:
++        def execute(self, sql, params): self.sql = sql
++        def fetchall(self):
++            if 'FROM 三大法人買賣' in self.sql:
++                return [('2330', d, 300000, 100000, 200000, 0, CUTOFF) for d in DAYS]
++            return []
++    contexts, readiness = load_equity_order_flow(Sources(), Stocks(), master=MASTER,
++        as_of_date=DAY, cutoff_utc=CUTOFF, price_rows_by_code={c:PRICES for c in MASTER},
++        session_dates_by_market={m:set(DAYS) for m in ('上市','上櫃')})
++    for market, code in [('上市','2330'),('上櫃','3105')]:
++        assert contexts[code]['institutions']['direction'] == 1
++        assert readiness[market]['same_day_count'] == 1
++        assert readiness[market]['direction_usable_count'] == 1
++        assert readiness[market]['qualified_vote_count'] == 1
++        assert '已納入判讀' in format_flow_readiness(market,readiness[market],1)
++    assert contexts['3105']['broker_branches']['direction'] == 0
++    assert readiness['上櫃']['broker']['status'] == 'source_unavailable_skipped'
++    assert '上櫃券商分點買賣資料未收集' in format_flow_readiness('上櫃',readiness['上櫃'],1)
+--- /dev/null
++++ b/tests/test_existing_quote_history.py
+@@ -0,0 +1,62 @@
++"""Existing date-bounded history must complete windows without replacing live quotes."""
++import datetime as dt
++import source_extension.signal_policy as policy
++
++END = dt.date(2026, 10, 15)
++DAYS = [dt.date(2026, 10, d) for d in (8, 12, 13, 14, 15)]
++CUTOFF = dt.datetime(2026, 10, 15, 13)
++MASTER = {'2330': {'market': '上市'}, '3105': {'market': '上櫃'}}
++
++
++def merge(current, stored, **kwargs):
++    # The pre-fix scanner used current source rows without the stored history.
++    fn = getattr(policy, 'merge_stored_quote_history', lambda a,b,**kw:(a,{}))
++    return fn(current, stored, master=MASTER, cutoff_utc=CUTOFF, **kwargs)
++
++
++def row(day, code='2330', **changes):
++    return dict(code=code, date=day, close=50., volume_lots=1000.,
++                captured_at=CUTOFF-dt.timedelta(seconds=1), **changes)
++
++
++def test_existing_earlier_rows_complete_window_with_lots_converted_to_shares():
++    current = {'2330': [(d,50.,1_000_000.,False) for d in DAYS[-2:]]}
++    merged, provenance = merge(current,[row(d) for d in DAYS[:-2]])
++    assert len(policy.quote_window(merged['2330'],DAYS,5)) == 5
++    assert all(r[2]==1_000_000 for r in merged['2330'])
++    assert provenance['2330']==3
++    assert len(current['2330'])==2  # Caller-owned data is preserved.
++
++
++def test_current_source_rows_and_explicit_quarantined_dates_are_never_overwritten():
++    current = {'2330': [(DAYS[1],50.,1_000_000.,False), (END,None,0,True)]}
++    merged, provenance = merge(current,[row(DAYS[0]), row(DAYS[2]), row(END)],
++                               known_quote_keys={('2330',DAYS[2])})
++    assert len(merged['2330'])==3
++    assert merged['2330'][-1] == current['2330'][-1]
++    assert DAYS[2] not in {r[0] for r in merged['2330']}
++
++
++def test_stored_data_fills_a_market_session_missing_from_the_new_feed():
++    current = {'2330': [(DAYS[0],50.,1_000_000.,False),(END,50.,1_000_000.,False)]}
++    merged, provenance = merge(current,[row(d) for d in DAYS[1:-1]])
++    assert len(policy.quote_window(merged['2330'],DAYS,5))==5
++    assert provenance['2330']==3
++
++
++def test_duplicate_late_bad_and_unknown_market_rows_do_not_certify_history():
++    current = {'2330': [(END,50.,1_000_000.,False)]}
++    rows = [row(DAYS[0]),row(DAYS[0]),dict(row(DAYS[1]),captured_at=CUTOFF+dt.timedelta(seconds=1)),
++            dict(row(DAYS[2]),volume_lots=-1), row(DAYS[3],code='9999')]
++    merged, provenance = merge(current,rows)
++    assert merged == current
++    assert not provenance
++    merged, provenance = merge(current,[row(DAYS[0])])
++    assert len(merged['2330'])==2
++
++
++def test_one_market_cannot_supply_another_markets_missing_source_boundary():
++    current = {'2330': [(END,50.,1_000_000.,False)]}
++    merged, provenance = merge(current,[row(DAYS[0],code='3105')])
++    assert '3105' not in merged
++    assert not provenance
+--- a/tests/test_equity_order_flow.py
++++ b/tests/test_equity_order_flow.py
+@@ -59,14 +59,13 @@
+     }
+ 
+ 
+-def test_institutional_direction_stays_shadow_only_pending_validation():
++def test_institutional_direction_uses_available_data_with_existing_rules():
+     result = institutional_signal(inst_panel(SESSIONS[-3:]), PRICES, SESSIONS, AS_OF)
+-    assert result["direction"] == 0
+-    assert result["vote_enabled"] is False
+-    assert result["status"] == "direction_disabled_pending_validation"
+-    assert result["shadow_direction"] == 1
+-    assert result["shadow_selected_window"]["days"] == 3
+-    assert result["shadow_selected_window"]["net_intensity_pct"] == 30
++    assert result["direction"] == 1
++    assert result["vote_enabled"] is True
++    assert result["status"] == "qualified"
++    assert result["selected_window"]["days"] == 3
++    assert result["selected_window"]["net_intensity_pct"] == 30
+     assert "5" not in result["windows"]
+ 
+ 
+@@ -78,19 +77,19 @@
+     )[SESSIONS[0] - dt.timedelta(days=1)]
+     result = institutional_signal(panel, PRICES, SESSIONS, AS_OF)
+     assert set(result["windows"]) == {"1"}
+-    assert result["shadow_selected_window"]["days"] == 1
+-    assert result["direction"] == 0
++    assert result["selected_window"]["days"] == 1
++    assert result["direction"] == 1
+ 
+ 
+ def test_opposite_qualified_windows_abstain_instead_of_cherry_picking():
+     panel = inst_panel(total=500000, foreign=300000, trust=200000)
+     panel[AS_OF].update(total=-500000, foreign=-300000, trust=-200000)
+     result = institutional_signal(panel, PRICES, SESSIONS, AS_OF)
+-    assert result["windows"]["5"]["shadow_direction"] == 1
+-    assert result["windows"]["1"]["shadow_direction"] == -1
+-    assert result["shadow_status"] == "different_windows_disagree"
++    assert result["windows"]["5"]["direction"] == 1
++    assert result["windows"]["1"]["direction"] == -1
++    assert result["status"] == "different_windows_disagree"
+     assert result["direction"] == 0
+-    assert result["status"] == "direction_disabled_pending_validation"
++    assert result["vote_enabled"] is True
+ 
+ 
+ def test_dealer_only_and_small_or_zero_flow_do_not_vote():
+@@ -109,15 +108,14 @@
+     panel, rejected = select([source_row], rows)
+     assert panel["3105"][AS_OF]["total"] == -300000
+     assert panel["3105"][AS_OF]["natural_pit"]
+-    assert rejected["legacy_source_not_authorized"] == 1
++    assert not rejected
+     for changes in ({"quality_status": "quarantine"}, {"unit": "lots"}):
+         panel, rejected = select([{**source_row, **changes}], rows)
+         assert "3105" not in panel
+         assert rejected["official_quality_or_duplicate"] == 1
+-        assert rejected["legacy_source_not_authorized"] == 1
+     panel, rejected = select(rows=[{**legacy(), "foreign": 150000}])
+     assert not panel
+-    assert rejected["legacy_source_not_authorized"] == 1
++    assert rejected["stored_quality_or_duplicate"] == 1
+ 
+ 
+ def test_future_creation_effective_dates_missing_components_and_duplicates_excluded():
+@@ -223,15 +221,15 @@
+         Sources(), Stocks(), master=MASTER, as_of_date=AS_OF, cutoff_utc=CUTOFF,
+         price_rows_by_code=prices, session_dates_by_market={"上市": {r[0] for r in prices["2330"]}, "上櫃": set()},
+     )
+-    assert context["2330"]["institutions"]["direction"] == 0
+-    assert readiness["上市"]["status"] == "source_not_authorized"
+-    assert readiness["上市"]["vote_enabled"] is False
+-    assert readiness["上市"]["three_session_ready_count"] is None
++    assert context["2330"]["institutions"]["direction"] == 1
++    assert readiness["上市"]["status"] == "evaluated"
++    assert readiness["上市"]["vote_enabled"] is True
++    assert readiness["上市"]["three_session_ready_count"] == 0
+     assert missing_day.isoformat() in readiness["上市"]["expected_session_dates"]
+     assert readiness["上市"]["calendar_verified"]
+ 
+ 
+-def test_tpex_flow_keeps_pit_diagnostics_without_enabling_votes_or_legacy_listed_rows():
++def test_tpex_flow_is_evaluated_with_pit_diagnostics_and_listed_table_is_queried():
+     official_rows = [official(day=day) for day in SESSIONS]
+     rows = [
+         (f"hash-{index}", row["entity_id"], row["effective_date"],
+@@ -267,16 +265,14 @@
+     otc = readiness["上櫃"]
+     assert otc["same_day_count"] == otc["natural_pit_same_day_count"] == 1
+     assert otc["five_session_ready_count"] == 1
+-    assert otc["vote_enabled"] is False
+-    assert otc["qualified_vote_count"] == 0
+-    assert otc["shadow_direction_candidate_count"] == 1
+-    assert contexts["3105"]["institutions"]["direction"] == 0
+-    assert contexts["3105"]["institutions"]["shadow_direction"] == 1
+-    assert readiness["上市"]["status"] == "source_not_authorized"
+-    assert readiness["上市"]["same_day_count"] is None
+-    assert all("三大法人買賣" not in query for query in stocks.queries)
+-    assert "方向尚待多日期成熟成效驗證" in format_flow_readiness("上櫃", otc, 1)
+-    assert "買賣超未知" in format_flow_readiness("上市", readiness["上市"], 1)
++    assert otc["vote_enabled"] is True
++    assert otc["qualified_vote_count"] == 1
++    assert contexts["3105"]["institutions"]["direction"] == 1
++    assert readiness["上市"]["status"] == "same_day_data_unavailable"
++    assert readiness["上市"]["same_day_count"] == 0
++    assert any("三大法人買賣" in query for query in stocks.queries)
++    assert "已納入判讀" in format_flow_readiness("上櫃", otc, 1)
++    assert "同日已收 0/1" in format_flow_readiness("上市", readiness["上市"], 1)
+ 
+ 
+ def test_broker_raw_threshold_is_insufficient_after_rounding_bound():
+--- a/tests/test_institutional_flow_readiness.py
++++ b/tests/test_institutional_flow_readiness.py
+@@ -55,7 +55,7 @@
+     assert result["上市"]["same_day_count"] is None
+     assert result["上市"]["traded_without_source_count"] is None
+     assert "已收 1/2" in format_flow_readiness("上櫃", otc, 2)
+-    assert "缺已授權" in format_flow_readiness("上市", result["上市"], 1)
++    assert "稽核未讀取既有股票表" in format_flow_readiness("上市", result["上市"], 1)
+ 
+ 
+ def test_complete_natural_panel_saves_shadow_facts_without_enabling_votes():
+@@ -66,7 +66,7 @@
+     assert shadow["foreign_net_shares_5d"] == 500000
+     assert shadow["dealer_net_shares_5d"] == 0  # Foreign dealers not added twice.
+     assert not otc["vote_enabled"]
+-    assert otc["status"] == "context_only_validation_pending"
++    assert otc["status"] == "official_feed_observed"
+ 
+ 
+ def test_missing_session_or_duplicate_day_cannot_be_replaced_by_row_offset():
+@@ -108,7 +108,7 @@
+     result = assess([observation(AS_OF, code="00411A"), observation(AS_OF, code="2330")])
+     assert result["上櫃"]["same_day_count"] == 0
+     assert result["上櫃"]["source_unmatched_count"] == 2
+-    assert result["上市"]["status"] == "source_not_authorized"
++    assert result["上市"]["status"] == "stored_source_not_assessed"
+ 
+ 
+ def test_price_gaps_no_trade_and_calendar_failure_prevent_complete_panel():

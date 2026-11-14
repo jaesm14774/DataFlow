@@ -1,0 +1,1117 @@
+{
+  "observed_at": "2026-10-14T22:46:04.178986+08:00",
+  "db_writes": false,
+  "sources": [
+    {
+      "source": "鉅亨網",
+      "crawler": "Anue",
+      "articles": [
+        {
+          "url": "https://news.cnyes.com/news/id/6630550?exp=a",
+          "listing_category": "",
+          "title": "...",
+          "article_id": "6630550",
+          "category": "",
+          "created_at": "2026-10-14 22:22:51",
+          "author": "編譯鍾詠翔 綜合外電2026-10-14 22:22",
+          "body_chars": 302,
+          "body_sha256": "b54174fe431c30a65524e6b191556be5f8ba689bea682f2ddf2147c41644d8ca",
+          "body_lead": "據《塔斯社》14日（周三）報導，俄羅斯儲蓄銀行證實，其位於薩拉托夫州巴拉科沃市的資料處理中心遭無人機襲擊。\n\n俄羅斯儲蓄銀行第一副董事長亞歷山大·韋佳欣韋佳欣表示：「我們確認資料中心遭到攻擊。不過，所",
+          "valid": true
+        },
+        {
+          "url": "https://news.cnyes.com/news/id/6630523?exp=a",
+          "listing_category": "",
+          "title": "財報前夕先裁千人！Netflix成長放緩 2022年來最大裁員",
+          "article_id": "6630523",
+          "category": "",
+          "created_at": "2026-10-14 22:10:40",
+          "author": "編譯段智恆2026-10-14 22:10",
+          "body_chars": 713,
+          "body_sha256": "a2f065070907d8c932eee706e8d42dd35b19f4a160272055dcf12bc5f70ba3df",
+          "body_lead": "Netflix(NFLX-US)將在全球裁撤約1,000人，占員工總數6%，為2022年以來最大規模裁員。這家串流影音龍頭正面臨成長放緩、用戶參與度下滑的挑戰，此次裁員距離下一季財報公布僅剩一周，但該",
+          "valid": true
+        },
+        {
+          "url": "https://news.cnyes.com/news/id/6629916?exp=a",
+          "listing_category": "",
+          "title": "AMD再漲GDDR6記憶體價格！RX 9000系列顯卡恐跟進漲價、輝達暫按兵不動",
+          "article_id": "6629916",
+          "category": "",
+          "created_at": "2026-10-14 22:10:04",
+          "author": "編譯莊閔棻2026-10-14 22:10",
+          "body_chars": 634,
+          "body_sha256": "5a70684681d6f99c6ab47a37485ae044838c7a3ac9627908e796a8a6b60ffb79",
+          "body_lead": "隨著記憶體價格再度攀升，有消息指出，超微半導體(AMD-US) 已再度調高GDDR6記憶體價格，使合作板卡廠商恐將進一步把成本轉嫁給消費者。另一方面，輝達(NVDA-US) 目前則尚未調漲記憶體價格。",
+          "valid": true
+        },
+        {
+          "url": "https://news.cnyes.com/news/id/6630524?exp=a",
+          "listing_category": "",
+          "title": "法盛投資管理：AI熱潮席捲亞洲 投資人期待高報酬卻面臨風險落差",
+          "article_id": "6630524",
+          "category": "",
+          "created_at": "2026-10-14 21:52:17",
+          "author": "陳于晴 台北2026-10-14 21:52",
+          "body_chars": 1201,
+          "body_sha256": "8fbd280c4d1ee42eade9d2bbc7ddfee0d7c251c1edb05e52729025f764f9b2ce",
+          "body_lead": "過去18個月來，全球 AI 浪潮帶動亞洲股市大幅上揚，投資人對未來的長期回報預期亦隨之水漲船高。然而，法盛投資管理發布《2026 年亞洲投資人脈動調查》，發現亞洲投資人的預期報酬率與其風險承受能力之間",
+          "valid": true
+        },
+        {
+          "url": "https://news.cnyes.com/news/id/6630512?exp=a",
+          "listing_category": "",
+          "title": "10月升息重回討論！華爾街憂通膨擴散 有人喊12月升2碼",
+          "article_id": "6630512",
+          "category": "",
+          "created_at": "2026-10-14 21:50:07",
+          "author": "編譯段智恆2026-10-14 21:50",
+          "body_chars": 1672,
+          "body_sha256": "880e2edd0e18c6950873792b2b268661e787feb3af3f237c76bdec973d81d65c",
+          "body_lead": "美國通膨比預期更熱，華爾街關注的已不只是油價，而是能源成本是否正擴散至服務與商品價格，讓聯準會(Fed)更難結束緊縮。分析師對10月是否升息看法分歧，多人仍押注12月才會行動，但也有人警告，若油價持續",
+          "valid": true
+        },
+        {
+          "url": "https://news.cnyes.com/news/id/6630399?exp=a",
+          "listing_category": "",
+          "title": "〈美股早盤〉Fed升息疑慮壓境！主要指數漲跌互現 美元創逾一年新高",
+          "article_id": "6630399",
+          "category": "",
+          "created_at": "2026-10-14 21:40:19",
+          "author": "編譯段智恆 綜合外電2026-10-14 21:40",
+          "body_chars": 1547,
+          "body_sha256": "87228eab650dd5dc99ed0117ace9650ec71da0af2a9b1c902f385893c2edb135",
+          "body_lead": "美國9月通膨數據高於預期，推升市場對聯準會(Fed)本月升息的押注，美股主要指數周三(14日)開盤漲跌互現，標普500指數連續第三個交易日下跌。\n\n美債同步遭到拋售，短天期公債賣壓較重，2年期美債殖利",
+          "valid": true
+        }
+      ],
+      "url_count": 30,
+      "listing_categories": {
+        "": 30
+      },
+      "valid_count": 6
+    },
+    {
+      "source": "中央社",
+      "crawler": "CNA",
+      "articles": [
+        {
+          "url": "https://www.cna.com.tw/news/aopl/202610140342.aspx",
+          "listing_category": "",
+          "title": "英國商貿大臣：不會迫於歐盟壓力對中國電動車加稅",
+          "article_id": "202610140342",
+          "category": "國際",
+          "created_at": "2026-10-14 22:14",
+          "author": "（中央社記者陳韻聿倫敦14日專電）",
+          "body_chars": 1999,
+          "body_sha256": "9181edfe6b3245f454d8769026c5d5cb842256c152e93ed18c8b5de091fa8e65",
+          "body_lead": "英國商業、創新、科學暨貿易大臣雷諾茲說，英國不會迫於來自歐盟的壓力，對中國電動車加徵進口關稅。他強調，英國就貿易防衛措施採取任何決策時，依據的是英國的國家利益，「而不是因為有任何國家提出要求」。\n歐盟",
+          "valid": true
+        },
+        {
+          "url": "https://www.cna.com.tw/news/acn/202610140345.aspx",
+          "listing_category": "",
+          "title": "中國9月新增人民幣貸款高於預期  分析：刺激措施可能發揮作用",
+          "article_id": "202610140345",
+          "category": "兩岸",
+          "created_at": "2026-10-14 22:25",
+          "author": "（中央社台北14日電）",
+          "body_chars": 666,
+          "body_sha256": "c95010fca95e3d99e6b85dd0e1c02feb9938ce771cd86eedf30ebbd094a78275",
+          "body_lead": "中國人民銀行（中國央行）今天公布，今年前3季人民幣貸款增加11.52兆元（約新台幣55.27兆元），據路透社計算，9月新增人民幣貸款1.08兆元，高於市場預期，認為貸款回升顯示中國近期推出新一輪刺激措",
+          "valid": true
+        },
+        {
+          "url": "https://www.cna.com.tw/news/ahel/202610140340.aspx",
+          "listing_category": "",
+          "title": "今彩539第115249期　頭獎槓龜",
+          "article_id": "202610140340",
+          "category": "生活",
+          "created_at": "2026-10-14 22:03",
+          "author": "（中央社台北14日電）",
+          "body_chars": 155,
+          "body_sha256": "1095d615e67dacaa504dfdebbd29b7884a1cb48d6cfc42258a9bb0b417f3ddcb",
+          "body_lead": "今彩539第115249期開獎，中獎號碼25、09、19、13、01；派彩結果，頭獎槓龜。\n貳獎187注中獎，每注獎金新台幣2萬元。\n3星彩中獎號碼953，壹獎72注中獎，每注獎金5000元。\n4星彩",
+          "valid": true
+        },
+        {
+          "url": "https://www.cna.com.tw/news/afe/202610143003.aspx",
+          "listing_category": "",
+          "title": "東協財經／邁科增資越南子公司590萬美元",
+          "article_id": "202610143003",
+          "category": "證券",
+          "created_at": "2026-10-14 21:45",
+          "author": "（中央社台北14日電）",
+          "body_chars": 227,
+          "body_sha256": "f1539a8a73bbf71dfe389104e352fba06abf780f657e661b7f7a0efc3099af09",
+          "body_lead": "散熱模組廠邁科今天董事會決議，增資子公司Microloops Vietnam Corp. Company Limited，總金額590萬美元（約新台幣1.89億元）。\nMicroloops Vietn",
+          "valid": true
+        },
+        {
+          "url": "https://www.cna.com.tw/news/aipl/202610140336.aspx",
+          "listing_category": "",
+          "title": "李明哲訪德：非冤獄受害者　盼牢獄經歷成國際對話資產",
+          "article_id": "202610140336",
+          "category": "政治",
+          "created_at": "2026-10-14 21:41",
+          "author": "（中央社記者林尚縈柏林14日專電）",
+          "body_chars": 1417,
+          "body_sha256": "150563e34575a03c4690c6ebdd1cae026fd7d51526fa1a3b26672be29f1e343a",
+          "body_lead": "曾遭中國監禁5年的人權工作者李明哲本月走訪歐洲，分享自身經歷與中國跨國鎮壓帶來的風險。他在柏林接受中央社專訪表示，自己曾受自由社會幫助，他不願只被視為「冤獄受害者」，更希望將5年牢獄經歷轉化為與國際社",
+          "valid": true
+        },
+        {
+          "url": "https://www.cna.com.tw/news/acul/202610140333.aspx",
+          "listing_category": "",
+          "title": "走訪台南百大文化基地　李遠強調千里文化森林願景",
+          "article_id": "202610140333",
+          "category": "文化",
+          "created_at": "2026-10-14 21:06",
+          "author": "（中央社記者王寶兒台南14日電）",
+          "body_chars": 1017,
+          "body_sha256": "4c239131b7b17972bcc17e2cf254c592ea2a4d5034437b3c5d57194165cadd1d",
+          "body_lead": "台史博1月宣布已啟動第2期擴建計畫，文化部長李遠今天表示，計畫工程將運用「生態」縫補亞太國際棒球訓練中心，盼以此延伸打造「千里文化森林」，「我們一定要把樹種回來」。\n李遠今天下午在台南走訪百大文化基地",
+          "valid": true
+        }
+      ],
+      "url_count": 100,
+      "listing_categories": {
+        "": 100
+      },
+      "valid_count": 6
+    },
+    {
+      "source": "中時日報",
+      "crawler": "ChinaTimes",
+      "articles": [
+        {
+          "url": "https://www.chinatimes.com/realtimenews/20261014004882-260404",
+          "listing_category": "娛樂",
+          "title": "李多慧瞞父母「突襲返韓」媽媽一見女兒激動落淚 影片全網看哭",
+          "article_id": "20261014004882-260404",
+          "category": "娛樂",
+          "created_at": "2026-10-14 22:40:00",
+          "author": "中時新聞網 翁語岑",
+          "body_chars": 700,
+          "body_sha256": "c28d029bc5d69fe6d61b16d058a8a2e4fccdc335ccc24f93e09edae78fe38ed4",
+          "body_lead": "韓籍啦啦隊女神李多慧來台發展邁入第4年，憑藉活潑開朗的個性、甜美笑容與親民形象，在台灣累積大批粉絲，不僅工作表現亮眼，也逐漸融入台灣生活，經常透過社群分享日常點滴，由於長期在台灣工作，李多慧與家人分隔",
+          "valid": true
+        },
+        {
+          "url": "https://www.chinatimes.com/realtimenews/20261014004864-260417",
+          "listing_category": "軍事",
+          "title": "美軍後勤新利器：SAFE MULE小型履帶裝卸車",
+          "article_id": "20261014004864-260417",
+          "category": "軍事",
+          "created_at": "2026-10-14 22:31:00",
+          "author": "中時新聞網 江飛宇",
+          "body_chars": 856,
+          "body_sha256": "3262a37508ca6ab795e4c1f4b9c8782745788df0bc03fefd32df44c7b21ea2f2",
+          "body_lead": "美國海軍陸戰隊（USMC）一向重視遠征作戰能力，這也需要高效率的後勤支援，才能迅速建立前進基地。美軍近期採購一款小型履帶式裝卸車「SAFE MULE」，可將重達1萬磅（約4,536公斤）的航空貨物棧板",
+          "valid": true
+        },
+        {
+          "url": "https://www.chinatimes.com/realtimenews/20261014004862-260408",
+          "listing_category": "國際",
+          "title": "紐西蘭留不住年輕人？赴澳移居潮創13年新高",
+          "article_id": "20261014004862-260408",
+          "category": "國際",
+          "created_at": "2026-10-14 22:29:00",
+          "author": "中時 林宛彤",
+          "body_chars": 797,
+          "body_sha256": "fecca5853ccb84383aa28b374f20d85ae24162e761d9235c885334a44a431a8e",
+          "body_lead": "紐西蘭民眾持續出走澳洲，今年首季移居澳洲的人數創下13年新高，為即將面臨大選的總理盧克森（Christopher Luxon）增添壓力。最新數據顯示，光是今年前3個月，就有逾1.2萬名紐西蘭公民前往澳",
+          "valid": true
+        },
+        {
+          "url": "https://www.chinatimes.com/realtimenews/20261014004844-260407",
+          "listing_category": "政治",
+          "title": "蘇巧慧贏13％？他揭「以鄰為壑」真相：幫沈伯洋跑龍套",
+          "article_id": "20261014004844-260407",
+          "category": "政治",
+          "created_at": "2026-10-14 22:19:00",
+          "author": "中時新聞網 祝潤霖",
+          "body_chars": 848,
+          "body_sha256": "219a00865b4edf1a33cfc14dd40b90bdf06813fcf040e451ee4e247e8c4da457",
+          "body_lead": "信民協會13日公布新北市長民調，蘇巧慧支持度贏過李四川13.1個百分點，引發質疑。媒體人朱凱翔直指，蘇巧慧陣營根本不會高興，此舉反而激起藍綠對立，這只是曹興誠硬要幫沈伯洋參選台北打雞血，營造外溢效應，",
+          "valid": true
+        },
+        {
+          "url": "https://www.chinatimes.com/realtimenews/20261014004830-260405",
+          "listing_category": "生活",
+          "title": "一躺上床突然想尿尿？泌尿醫揭4原因 不是水喝多了",
+          "article_id": "20261014004830-260405",
+          "category": "生活",
+          "created_at": "2026-10-14 22:11:00",
+          "author": "中時新聞網 吳長諭",
+          "body_chars": 493,
+          "body_sha256": "bff829986929d5cfbb01149c5ce14c2c540fb9ba6fb1c9a5af71d732cc9cb986",
+          "body_lead": "不少人明明白天排尿狀況一切正常，但只要晚上一躺上床、蓋好被子，又會感覺到一陣尿意？泌尿科醫師陳忠佐指出，一躺下就想尿尿的原因，並非只是單純水分攝取太多，還有其他原因，建議如果夜尿過於頻繁、影響到睡眠的",
+          "valid": true
+        },
+        {
+          "url": "https://www.chinatimes.com/realtimenews/20261014004786-260410",
+          "listing_category": "財經",
+          "title": "十年後半導體恐用掉3成電 台電打造輸電新血管「積體電網」",
+          "article_id": "20261014004786-260410",
+          "category": "財經",
+          "created_at": "2026-10-14 22:07:00",
+          "author": "工商 黃有容",
+          "body_chars": 955,
+          "body_sha256": "78aff85bf4988e506902147e43d45ce0e73de696b7a432c4472d7a52cdde5b3e",
+          "body_lead": "台電於「2026台灣國際智慧能源週」推出「積體電網」特展，台電董事長曾文生於「台灣電力未來十年布局」專題演講中表示，台電已提前掌握未來用電趨勢，預估國內半導體產業用電將由2026年約520億度，翻倍成",
+          "valid": true
+        }
+      ],
+      "url_count": 20,
+      "listing_categories": {
+        "國際": 6,
+        "生活": 4,
+        "娛樂": 3,
+        "政治": 2,
+        "財經": 2,
+        "社會": 2,
+        "軍事": 1
+      },
+      "valid_count": 6
+    },
+    {
+      "source": "ETtoday",
+      "crawler": "ETtoday",
+      "articles": [
+        {
+          "url": "https://star.ettoday.net/news/3254785",
+          "listing_category": "影劇",
+          "title": "辛蒂克勞馥27歲兒驟逝「親妹身心崩潰」　凱亞葛柏時隔21天首現身",
+          "article_id": "3254785",
+          "category": "ETtoday星光雲",
+          "created_at": "2026-10-14 22:18:00",
+          "author": "記者蔡宜芳／綜合報導",
+          "body_chars": 733,
+          "body_sha256": "476f893885d0cb549d1e68de1d056b4c23140930ba3328b8bb3d0818c694c76f",
+          "body_lead": "美國傳奇超模辛蒂克勞馥（Cindy Crawford）的27歲長子普雷斯利葛柏（Presley Gerber），在上月20日傳出憾事，不只讓演藝圈一片譁然，其手足凱亞葛柏（Kaia Gerber）更是",
+          "valid": true
+        },
+        {
+          "url": "https://fashion.ettoday.net/news/3254484",
+          "listing_category": "時尚",
+          "title": "愛馬仕解構經典凱莉包鎖扣　變身雙圈珠寶又美又帥",
+          "article_id": "3254484",
+          "category": "ET Fashion",
+          "created_at": "2026-10-14 22:01:00",
+          "author": "記者陳雅韻／台北報導",
+          "body_chars": 782,
+          "body_sha256": "433ff8474bd123a5b855e2a1396a13eb058a39f146e637530156ff2a8126a88d",
+          "body_lead": "愛馬仕（Hermès）今（14日）起連續5日在台展出Double Tour 系列珠寶，63件作品將雙圈意象發揮得淋漓盡致，源起自曾任品牌女裝設計師的Martin Margiela設計的雙圈皮帶，愛馬仕",
+          "valid": true
+        },
+        {
+          "url": "https://www.ettoday.net/news/20261014/3254777.htm",
+          "listing_category": "生活",
+          "title": "小港醫院醫護院內嗨跳〈BAD〉！超帥舞姿萬人讚爆：要出道嗎",
+          "article_id": "3254777",
+          "category": "生活焦點",
+          "created_at": "2026-10-14 21:58:00",
+          "author": "記者柯振中／綜合報導",
+          "body_chars": 593,
+          "body_sha256": "8e5b023522a6f01ca31338c9099a718dd2688b8d8e81fb010aaec478c56e17e6",
+          "body_lead": "醫院給人的感覺是個嚴肅的場所，不過高雄市立小港醫院下個月即將滿28週年，許多醫師、護理人員特意集合在一起，在鏡頭前大跳熱門歌曲〈BAD〉的MV舞蹈，醫護人員在鏡頭前帥氣震胸的模樣，讓許多病患嗨翻了。\n",
+          "valid": true
+        },
+        {
+          "url": "https://www.ettoday.net/news/20261014/3254782.htm",
+          "listing_category": "政治",
+          "title": "黃敏惠北上政院談交通　卓榮泰允助BRT接駁量能、協商輕軌經費",
+          "article_id": "3254782",
+          "category": "政治焦點",
+          "created_at": "2026-10-14 21:44:00",
+          "author": "記者陳家祥／台北報導",
+          "body_chars": 402,
+          "body_sha256": "853521ec795bb7b130042628a6b3539f0a9a52adf45d944b5ebd901eac46b7ff",
+          "body_lead": "行政院發言人李慧芝表示，行政院卓榮泰院長今（14日）與嘉義市長黃敏惠以及市府團隊，針對嘉義縣市地區交通議題進行會談，立法委員王美惠也一併與會。會中針對提升交通量達成3點共識，交通部先行協助提高BRT接",
+          "valid": true
+        },
+        {
+          "url": "https://www.ettoday.net/news/20261014/3254775.htm",
+          "listing_category": "社會",
+          "title": "台南車站傳落軌！男大生跟媽吵架闖軌道　目擊曝驚悚1分鐘",
+          "article_id": "3254775",
+          "category": "社會焦點",
+          "created_at": "2026-10-14 21:15:00",
+          "author": "記者林東良、許力方／台南報導",
+          "body_chars": 380,
+          "body_sha256": "fb05fd402af59174bdda95607fa36fa32fd85cda68e26ec4626b751eed81fefb",
+          "body_lead": "台鐵台南車站今（14日）晚間發生旅客落軌事件，一名羅姓男大生疑與母親發生爭執，情緒失控闖入鐵軌，鐵路警察及熱心旅客及時協助，將人拉回月台，他仍激動尖叫，最後因膝蓋擦傷送醫；事故也造成台鐵168次列車在",
+          "valid": true
+        },
+        {
+          "url": "https://sports.ettoday.net/news/3254764",
+          "listing_category": "體育",
+          "title": "火腿2失誤遭軟銀逆轉！陷0勝3敗絕境　DeNA完封阪神扳平系列賽",
+          "article_id": "3254764",
+          "category": "運動雲",
+          "created_at": "2026-10-14 20:37:00",
+          "author": "記者楊舒帆／綜合報導",
+          "body_chars": 1101,
+          "body_sha256": "43b7cc6902964a02edd2cb6daa73b1b636cbb4bb48af069c4baee31a0cdacd4d",
+          "body_lead": "日本職棒高潮系列賽（CS）決勝輪14日開打，洋聯例行賽冠軍軟銀鷹以6比4逆轉擊敗日本火腿，靠著4局下猛攻5分扭轉戰局，加上賽前取得2場保送勝，目前系列賽以3勝0敗領先，火腿已無退路。央聯方面，例行賽冠",
+          "valid": true
+        }
+      ],
+      "url_count": 570,
+      "listing_categories": {
+        "社會": 90,
+        "政治": 87,
+        "影劇": 82,
+        "生活": 61,
+        "國際": 45,
+        "財經": 42,
+        "體育": 41,
+        "時尚": 20,
+        "旅遊": 20,
+        "大陸": 19,
+        "健康": 14,
+        "房產雲": 11,
+        "3C家電": 9,
+        "ET車雲": 7,
+        "寵物動物": 6,
+        "AI科技": 5,
+        "消費": 5,
+        "論壇": 4,
+        "探索": 1,
+        "遊戲": 1
+      },
+      "valid_count": 6
+    },
+    {
+      "source": "自由時報",
+      "crawler": "LibertyTimes",
+      "articles": [
+        {
+          "url": "https://news.ltn.com.tw/news/life/breakingnews/5606521",
+          "listing_category": "生活",
+          "title": "彰縣府4年編14億改善彰化漁港  漁筏停泊量翻倍成長",
+          "article_id": "5606521",
+          "category": "生活",
+          "created_at": "2026-10-14 22:41:42",
+          "author": "記者劉曉欣／彰化報導",
+          "body_chars": 562,
+          "body_sha256": "d6022d15c3cf2d49dbab8b16208b8301f223ddccf197882355afd1b6e4a3fe41",
+          "body_lead": "等待了30年的彰化漁港在去年6月啟用漁筏停泊區，但只能容納155艘漁筏進駐，由於彰化漁港是全縣唯一的免候潮漁港，縣府從今年開始，將分4年編列預算，預計砸14.13億元來改善，可望在於2029年完工，讓",
+          "valid": true
+        },
+        {
+          "url": "https://news.ltn.com.tw/news/society/breakingnews/5606560",
+          "listing_category": "社會",
+          "title": "少1個！花蓮吉安大火一家6口逃出5人 64歲男3樓嗆昏送醫救回",
+          "article_id": "5606560",
+          "category": "社會",
+          "created_at": "2026-10-14 22:33:21",
+          "author": "記者花孟璟／花蓮報導",
+          "body_chars": 403,
+          "body_sha256": "8565a0d38cde8f2e8f7e7b914253f2a9231f8cfdd9be9fe2d0cd2ce7c6e7695e",
+          "body_lead": "花蓮吉安鄉明義七街美雅麥長老教會隔壁的民宅，晚間9點多突然車棚冒出熊熊火光，火勢一度竄燒到二樓，消防局趕到現場發現一樓全面燃燒，屋內5人幸運逃出，但屋主弟弟64歲簡姓男子被消防人員發現時已遭濃煙嗆昏趴",
+          "valid": true
+        },
+        {
+          "url": "https://ent.ltn.com.tw/news/breakingnews/5606561",
+          "listing_category": "娛樂",
+          "title": "李浚赫《中頭獎還是要上班》親測「買樂透」 悲慘戰績曝",
+          "article_id": "5606561",
+          "category": "娛樂",
+          "created_at": "2026-10-14 22:32:51",
+          "author": "",
+          "body_chars": 0,
+          "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "body_lead": "",
+          "valid": false
+        },
+        {
+          "url": "https://news.ltn.com.tw/news/world/breakingnews/5606539",
+          "listing_category": "國際",
+          "title": "新加坡2貨輪航經荷姆茲海峽遇襲 1船沉沒1受損 43船員平安獲救",
+          "article_id": "5606539",
+          "category": "國際",
+          "created_at": "2026-10-14 22:29:58",
+          "author": "即時新聞／綜合報導",
+          "body_chars": 267,
+          "body_sha256": "b2114501d2a166ce3e04fe5546f57224a026577d2efff231684098412854c78a",
+          "body_lead": "新加坡海事港務局（MPA）今（14）日說明，有2艘註冊在新加坡的貨輪在航經荷姆茲海峽（Strait of Hormuz）時，被不明飛行物擊中，其中1艘失火後沉沒，另外1艘船體受損。\n《路透》報導，新加",
+          "valid": true
+        },
+        {
+          "url": "https://estate.ltn.com.tw/article/29044",
+          "listing_category": "地產",
+          "title": "換屋被卡、首購買鳥籠！建商批豪宅限貸脫離現實：「20坪2房像套房」",
+          "article_id": "29044",
+          "category": "地產",
+          "created_at": "2026-10-14 22:29:00",
+          "author": "2026/10/14 22:29文/記者朱語蕎",
+          "body_chars": 841,
+          "body_sha256": "dd0f7b37cdd9c09afdb050ec85ad947f9e14134f9a35f0e4ef92abf0036d8578",
+          "body_lead": "央行在9月放寬第二戶最高貸款成數至7成，且將出售舊屋期限延長至18個月，但對於高總價住宅貸款限制仍在，建商直言，以桃園來說，總價超過4千萬即被認定為豪宅，貸款只剩3成，造成目前市場小宅氾濫，房子「越住",
+          "valid": true
+        },
+        {
+          "url": "https://news.ltn.com.tw/news/politics/breakingnews/5605455",
+          "listing_category": "政治",
+          "title": "違反滲透法遭約爕？ 參選花蓮市長前新黨張榮法發聲明自清",
+          "article_id": "5605455",
+          "category": "政治",
+          "created_at": "2026-10-14 22:28:51",
+          "author": "記者王錦義／花蓮報導",
+          "body_chars": 870,
+          "body_sha256": "459bfcec431cefe78bd32a24caa9f47c64d0c6617aeae3b417bd6bdb02db450f",
+          "body_lead": "首次上稿 09:18更新時間 22:28 新增張榮法聲明\n前新黨副發言人、曾代表新黨參選台北市議員的張榮法今年參選花蓮市長，疑似有接受境外敵對勢力的指示、委託或資助從事競選活動，花蓮地檢署指揮法務部調",
+          "valid": true
+        }
+      ],
+      "url_count": 20,
+      "listing_categories": {
+        "政治": 4,
+        "生活": 3,
+        "社會": 3,
+        "財經": 3,
+        "娛樂": 2,
+        "國際": 2,
+        "體育": 2,
+        "地產": 1
+      },
+      "valid_count": 5
+    },
+    {
+      "source": "newtalk",
+      "crawler": "NewTalk",
+      "articles": [
+        {
+          "url": "https://newtalk.tw/news/view/2026-10-14/1065576",
+          "listing_category": " ",
+          "title": "林口夜市掃街人氣旺！民眾自製「慧贏」大旗相挺 蘇巧慧提打造新北演唱會經濟",
+          "article_id": "2026-10-14/1065576",
+          "category": "政治",
+          "created_at": "2026-10-14 22:42:32",
+          "author": "",
+          "body_chars": 684,
+          "body_sha256": "0d61833a9b70717be4c618e6acde0f9495a2b92d1b1bd67fca1935ab7858b774",
+          "body_lead": "新北市長候選人、立法委員蘇巧慧今（14）日前往林口夜市掃街拜票，活動開始前一小時，便有支持民眾排隊等待，許多人帶著自製飄帶、手搖旗、「新北慧贏」大旗等文宣物到場為蘇巧慧加油，更有小朋友拿著手繪「蘇巧慧",
+          "valid": true
+        },
+        {
+          "url": "https://newtalk.tw/news/view/2026-10-14/1065577",
+          "listing_category": " ",
+          "title": "美國9月CPI年增率3.7% 高出市場預期",
+          "article_id": "2026-10-14/1065577",
+          "category": "財經",
+          "created_at": "2026-10-14 22:42:31",
+          "author": "",
+          "body_chars": 227,
+          "body_sha256": "ca39b56bde8b6d3188a7ce30395c82973653bbaa3f7ec11059454ed6b3663015",
+          "body_lead": "美國政府今天公布最新數據顯示，9月消費者物價指數（CPI）高於市場預期，年增率升至3.7%，這主要受到燃料成本上漲所影響。\n美國勞工部指出，9月CPI高於分析師預期，年增率升到3.7%。\n這項最新數據",
+          "valid": true
+        },
+        {
+          "url": "https://newtalk.tw/news/view/2026-10-14/1065578",
+          "listing_category": " ",
+          "title": "李明哲訪德：非冤獄受害者　盼牢獄經歷成國際對話資產",
+          "article_id": "2026-10-14/1065578",
+          "category": "政治",
+          "created_at": "2026-10-14 22:41:36",
+          "author": "Breadcrumb\n\n\nNewtalk新聞\n\n\n\n政治\n\n\n文/中央社",
+          "body_chars": 1538,
+          "body_sha256": "b86d11c1c7bd264248b62bad0057cd1a72d46b59b1a141524226b28a3c7d28f1",
+          "body_lead": "曾遭中國監禁5年的人權工作者李明哲本月走訪歐洲，分享自身經歷與中國跨國鎮壓帶來的風險。他在柏林接受中央社專訪表示，自己曾受自由社會幫助，他不願只被視為「冤獄受害者」，更希望將5年牢獄經歷轉化為與國際社",
+          "valid": true
+        },
+        {
+          "url": "https://newtalk.tw/news/view/2026-10-14/1065574",
+          "listing_category": " ",
+          "title": "（影）士林夜市恢復一天榮光！沈伯洋「洋流」席捲帶來「錢潮」",
+          "article_id": "2026-10-14/1065574",
+          "category": "政治",
+          "created_at": "2026-10-14 22:03:12",
+          "author": "",
+          "body_chars": 944,
+          "body_sha256": "9ab86b3233e4642ccd0d7c56905223434b0c84ecc09115e851b62a6004acdb4b",
+          "body_lead": "士林夜市近年來愈趨沒落。不過，民進黨台北市長參選人沈伯洋今（14）日再度帶領「洋流」掀起「錢潮」。今晚的士林夜市擠滿人潮，支持者站在兩邊等待沈的到來，把夜市擠得水洩不通。在沈離去之後，不少民眾就直接在",
+          "valid": true
+        },
+        {
+          "url": "https://newtalk.tw/news/view/2026-10-14/1065572",
+          "listing_category": " ",
+          "title": "上任僅28天且涉多醜聞！ 日相高市早苗證實已接受農林水產大臣辭呈",
+          "article_id": "2026-10-14/1065572",
+          "category": "國際",
+          "created_at": "2026-10-14 21:41:17",
+          "author": "",
+          "body_chars": 699,
+          "body_sha256": "5db640d0b87ff81c7d143a5839c9af7560eb24b2e2ffd435e635e76ade75f9d4",
+          "body_lead": "日本前農林水產大臣簗和生因涉及多起爭議，不僅遭在野黨要求下台，執政自民黨內也出現質疑其續任的聲音，就連共組聯合政府的日本維新會也公開批評其說明難以取得社會理解，要求他自行判斷進退。而簗和生今（14）日",
+          "valid": true
+        },
+        {
+          "url": "https://newtalk.tw/news/view/2026-10-14/1065573",
+          "listing_category": " ",
+          "title": "（影）蔣辦嗆不懂AI產業發展 沈伯洋：科技廊帶最主要是人才串聯",
+          "article_id": "2026-10-14/1065573",
+          "category": "政治",
+          "created_at": "2026-10-14 21:15:33",
+          "author": "Breadcrumb\n\n\nNewtalk新聞\n\n\n\n政治\n\n\n高逸帆台北市報導",
+          "body_chars": 801,
+          "body_sha256": "a61ff310fbd1f6dc20cd93408ba26b08fb952be0ec434c5de68a134350df99b5",
+          "body_lead": "台北市長蔣萬安日前提出松山機場遷移政見，並指要形成「首都科技廊帶」。民進黨台北市長參選人沈伯洋則說，AI有三個層面但沒什麼需要串聯。蔣辦批評，沈不懂AI產業發展。對此，沈今（14）日表示，科技廊帶最主",
+          "valid": true
+        }
+      ],
+      "url_count": 25,
+      "listing_categories": {
+        " ": 25
+      },
+      "valid_count": 6
+    },
+    {
+      "source": "公視新聞",
+      "crawler": "PTS",
+      "articles": [
+        {
+          "url": "https://news.pts.org.tw/article/831406",
+          "listing_category": "全球",
+          "title": "印尼野火釀嚴重霾害 飄散殃及東南亞鄰國",
+          "article_id": "831406",
+          "category": "全球",
+          "created_at": "2026-10-14 21:05:35",
+          "author": "游沛駿",
+          "body_chars": 667,
+          "body_sha256": "de9ecbcfd1e954a48b2557501715a4cc60f296896019fb49a24d8999df26778e",
+          "body_lead": "印尼最近爆發11年來最嚴重的野火與霧霾災情，有民間團體提起訴訟，指控政府忽視警訊，縱容災害反覆發生。而深受其害的新加坡政府，也在本周推出霧霾醫療補助，讓民眾可以用更便宜的價格治療呼吸道相關疾病。\n樹木",
+          "valid": true
+        },
+        {
+          "url": "https://news.pts.org.tw/article/831396",
+          "listing_category": "生活",
+          "title": "川普指台灣採購阿拉斯加天然氣 經濟部證實最高投資44億美元",
+          "article_id": "831396",
+          "category": "生活",
+          "created_at": "2026-10-14 20:45:10",
+          "author": "呂玠鋆",
+          "body_chars": 984,
+          "body_sha256": "aba8df0c0b62fe40e02bb1a49bb70e54604d98aaf885b6c8d80d73b2821e220d",
+          "body_lead": "美國總統川普在阿拉斯加州的造勢活動上表示，台灣未來20年內將採購當地液化天然氣管線計畫30%的天然氣，並加碼投資44億美元。經濟部隨即證實，強調為了確保穩定供應，會秉持氣源多元化採購的策略；但在野黨呼",
+          "valid": true
+        },
+        {
+          "url": "https://news.pts.org.tw/article/831395",
+          "listing_category": "政治",
+          "title": "海委會舉辦海線安全國際會議 美退將籲防範中國建立新常態",
+          "article_id": "831395",
+          "category": "政治",
+          "created_at": "2026-10-14 20:46:17",
+          "author": "張志雄",
+          "body_chars": 733,
+          "body_sha256": "3e9bf6b20de598622e3c306c03d900fcea55c1b9051d15ebd71df24288bac609",
+          "body_lead": "中共擾台行動不間斷，國防部公布，從今（14）日上午起，陸續偵獲13架次共機出海，配合共艦再度執行所謂「聯合戰備警巡」；昨（13）日則又有4艘中國海警船闖入金門限制水域。面對中國各種灰色地帶襲擾行動，國",
+          "valid": true
+        },
+        {
+          "url": "https://news.pts.org.tw/article/831391",
+          "listing_category": "社會",
+          "title": "「+1」開頭來電暴增20萬通 刑事局示警詐騙機率高",
+          "article_id": "831391",
+          "category": "社會",
+          "created_at": "2026-10-14 19:48:55",
+          "author": "陳冠勳",
+          "body_chars": 841,
+          "body_sha256": "bfa553bd8d11d7f6d81cb2a9be9fb77d9b675e421485cad87ff5d24fd0d5443f",
+          "body_lead": "民眾接到陌生來電，如果來電顯示是「+1」開頭，可能會是詐騙。刑事局與民間合作，調查高風險的境外來電號碼，已經從現實中不存在、遭詐欺集團竄改的「+422」轉向「+1」開頭，包含「+1911」、「+174",
+          "valid": true
+        },
+        {
+          "url": "https://news.pts.org.tw/article/831390",
+          "listing_category": "文教科技",
+          "title": "巨頭Anthropic再示警 AI如「蠕蟲」劫持網路難關閉",
+          "article_id": "831390",
+          "category": "文教科技",
+          "created_at": "2026-10-14 20:50:48",
+          "author": "徐家仁",
+          "body_chars": 804,
+          "body_sha256": "5ca907f573db7eff7916d3c18efdbb7af813385e3c167bd0aff294c4adf920b5",
+          "body_lead": "美國兩大AI業者OpenAI以及Anthropic，在公開發行IPO前的敏感時刻，又分別傳出資安疑雲。Anthropic強調，AI模型有能力像「蠕蟲」一樣隨機應變，自行以駭客姿態劫持網路裝置增強計算能",
+          "valid": true
+        },
+        {
+          "url": "https://news.pts.org.tw/article/831387",
+          "listing_category": "社福人權",
+          "title": "不滿資方長期未提升勞動待遇 中華電信工會發動罷工投票",
+          "article_id": "831387",
+          "category": "社福人權",
+          "created_at": "2026-10-14 19:44:56",
+          "author": "郭怜妤",
+          "body_chars": 906,
+          "body_sha256": "5554f8a93b19178a20d04b28b1a89a919813cd24efee046354d4a1d6f92e5804",
+          "body_lead": "中華電信工會不滿資方長期未明確加薪，也沒有提高勞退雇主提撥比例、修訂團體協約等改善勞動條件的措施，14日正式啟動罷工投票，爭取勞動權益。工會也批評，公司在投票前發文質疑選務公平，是惡意栽贓。對此，中華",
+          "valid": true
+        }
+      ],
+      "url_count": 15,
+      "listing_categories": {
+        "全球": 6,
+        "政治": 3,
+        "社會": 2,
+        "文教科技": 2,
+        "生活": 1,
+        "社福人權": 1
+      },
+      "valid_count": 6
+    },
+    {
+      "source": "三立新聞",
+      "crawler": "SETN",
+      "articles": [
+        {
+          "url": "https://www.setn.com/news/1922690",
+          "listing_category": "國際",
+          "title": "老婆站川普身旁「整形臉」遭酸！9兆富豪不忍了    親上火線護妻",
+          "article_id": "1922690",
+          "category": "國際",
+          "created_at": "2026-10-14 22:42:00",
+          "author": "",
+          "body_chars": 1299,
+          "body_sha256": "62294d40461b1f5f535e53cbd53901508ed3b7caa5a4417149ae10a96cae736e",
+          "body_lead": "圖、文／鏡週刊\n美國電腦大廠戴爾（Dell）創辦人、61歲的億萬富豪麥可戴爾（Michael Dell）近日與妻子蘇珊（Susan Dell）一同現身白宮，站在美國總統川普（Donald Trump）",
+          "valid": true
+        },
+        {
+          "url": "https://star.setn.com/news/1922683",
+          "listing_category": "娛樂",
+          "title": "孫芸芸26歲女兒「炫腹」！網驚瘦好多    她親揭體重真相：不要焦慮",
+          "article_id": "1922683",
+          "category": "娛樂",
+          "created_at": "2026-10-14 22:40:00",
+          "author": "",
+          "body_chars": 836,
+          "body_sha256": "f005c8a8dad283790253a87c7cb38fc9ab749302133230477eb9381f35d2bf3b",
+          "body_lead": "圖、文／鏡週刊\n微風董娘孫芸芸的26歲女兒廖思惟（Trinity）遺傳了媽媽的外貌和品味，經常在社群網站分享生活點滴。近日她分享新照，對著鏡頭「炫腹」，面對網友驚呼她「瘦了」的評論，她也親自回應，揭露",
+          "valid": true
+        },
+        {
+          "url": "https://www.setn.com/news/1922711",
+          "listing_category": "政治",
+          "title": "賴惠員酸賈永婕穿純樸點！    網起底她繫「3.6萬愛馬仕皮帶」秒被打臉",
+          "article_id": "1922711",
+          "category": "政治",
+          "created_at": "2026-10-14 22:37:00",
+          "author": "編輯 政治中心 報導",
+          "body_chars": 932,
+          "body_sha256": "41f715b5eeaf55aeed6bc85ff2d892f14d1629974e42f59466e30b603e0cdb3d",
+          "body_lead": "台北101董事長賈永婕赴立法院財政委員會備詢，卻因一身時尚穿搭引發民進黨立委賴惠員當場質疑，要求其下次「穿得純樸一點」，雙方在國會殿堂爆發唇槍舌戰。此事件曝光後隨即發酵，不少網友質疑立委過度干涉個人穿",
+          "valid": true
+        },
+        {
+          "url": "https://www.setn.com/news/1922624",
+          "listing_category": "生活",
+          "title": "重陽節想招財！命理師教拿午時水「擦這地方」    11招開運方法曝",
+          "article_id": "1922624",
+          "category": "生活",
+          "created_at": "2026-10-14 22:33:00",
+          "author": "周佩怡",
+          "body_chars": 918,
+          "body_sha256": "89b77d79e53d3a922bdfda40c81eec5fb5afe16134342a79bed9936fde002314",
+          "body_lead": "今年重陽節將在10月18日登場，命理師楊登嵙提醒，今年「五黃星」落在家中南方，民俗上被視為容易招來疾病、意外及官司的凶位，應避免動土、裝修。他也分享11招重陽節開運法，其中當天上午11時至下午1時，可",
+          "valid": true
+        },
+        {
+          "url": "https://fuhouse.setn.com/news/1922707",
+          "listing_category": "房產",
+          "error": "ValueError: SETN article page has no NewsArticle JSON-LD",
+          "valid": false
+        },
+        {
+          "url": "https://www.setn.com/news/1922709",
+          "listing_category": "財經",
+          "title": "台股藏「誘多紅K」訊號！專家曝3招操作：別吃短線回檔的虧",
+          "article_id": "1922709",
+          "category": "財經",
+          "created_at": "2026-10-14 22:30:00",
+          "author": "許展溢",
+          "body_chars": 841,
+          "body_sha256": "0cb4e68347626aa99114a92c121fab0f3649b0aa06382cb9b305f6d7d464232d",
+          "body_lead": "台股今（14）日盤中一度逼近49,000點關卡，終場上漲284.52點，收在48,625.83點。資深分析師周代運對此提出警告，直言今日尾盤暗藏隱性賣壓，屬於極重的「誘多」紅K，呼籲投資人切勿急著追高",
+          "valid": true
+        }
+      ],
+      "url_count": 30,
+      "listing_categories": {
+        "政治": 7,
+        "生活": 6,
+        "國際": 5,
+        "財經": 4,
+        "社會": 4,
+        "娛樂": 2,
+        "房產": 1,
+        "運動": 1
+      },
+      "valid_count": 5
+    },
+    {
+      "source": "TVBS",
+      "crawler": "TVBS",
+      "articles": [
+        {
+          "url": "https://news.tvbs.com.tw/life/4036167",
+          "listing_category": "life",
+          "title": "ä¸æ°æ¡æ¶åå´å°å·¨èãå­¸æ¬åé«æ³å¥å´é­æ¨æãç¾å´çå£è§è¡çª",
+          "article_id": "4036167",
+          "category": "life",
+          "created_at": "2026-10-14 21:34:00",
+          "author": "æ¢ä¸ç",
+          "body_chars": 2886,
+          "body_sha256": "6fce8aedd9cd04d55df379048a799d0194f1487acdb21bb365c149934acd0237",
+          "body_lead": "ä¸æ°å¤§å­¸ä»ï¼14æ¥ï¼å¤©å¨å°åå°å·¨èåå ´èè¾¦æ ¡æ¶ææï¼ä¸æ°å­¸æ¬åé²é£ç·ç­",
+          "valid": true
+        },
+        {
+          "url": "https://news.tvbs.com.tw/world/4036170",
+          "listing_category": "world",
+          "title": "AIè¿æå±¢åºåï¼DeepMindé«å±¤ç¤ºè­¦ï¼ç¼ºç£ç®¡2å¹´å§æéãéå¤§äºæã",
+          "article_id": "4036170",
+          "category": "world",
+          "created_at": "2026-10-14 21:41:56",
+          "author": "é»è¥ç¶­",
+          "body_chars": 1370,
+          "body_sha256": "87907ff33bd94c87415e34e5a2fad7a89665f7d99b37b4f9b160408fe312f121",
+          "body_lead": "äººå·¥æºæ§ï¼AIï¼ç ç©¶æ©æ§Google DeepMindè£äºé·åè©æ¯æ¯ä»å¤©è¡¨ç¤ºï¼é¨èAIç³»çµ±è½",
+          "valid": true
+        },
+        {
+          "url": "https://news.tvbs.com.tw/local/4036173",
+          "listing_category": "local",
+          "title": "å¹¼ååéè¿ä¸æï¼ç¶²åè»å§é­è«è¤²ä¾µç¯ãåç·å¾ææäº",
+          "article_id": "4036173",
+          "category": "local",
+          "created_at": "2026-10-14 21:55:01",
+          "author": "æ²å»ºé¦",
+          "body_chars": 1243,
+          "body_sha256": "2af6677091e70e0ed89ae401a1b226b84090b8f9397a4e55a41317cecd0f5a07",
+          "body_lead": "å°ä¸­å¸ä¸åç·å­Aç·ééäº¤åè»é«èªè­31æ­²ç·å­é¿åï¼ååï¼ï¼å©äººç¸ç´å¨å°ä",
+          "valid": true
+        },
+        {
+          "url": "https://news.tvbs.com.tw/esg/4035022",
+          "listing_category": "esg",
+          "title": "ççç½åééã10å¹´â5å¹´ãï¼å°ççå©11%ãå­¸èï¼å¾é£æåä¾",
+          "article_id": "4035022",
+          "category": "esg",
+          "created_at": "2026-10-14 22:00:00",
+          "author": "åä¿å",
+          "body_chars": 3188,
+          "body_sha256": "111c0cc6197f83642da6e5f76002da3c6ae144e4b033655295ab8e0b8c577c7d",
+          "body_lead": "å°ç£å¨éæµ·åççç¤çæç³»çµ±æ­£é¢è¨å´å³»ææ°ï¼æ ¹æå¨çççç¤ç£æ¸¬ç¶²å ±åé",
+          "valid": true
+        },
+        {
+          "url": "https://news.tvbs.com.tw/health/4035604",
+          "listing_category": "health",
+          "title": "UCCåæ¥å°çè¼æ¥ç  ä½åæµæææé",
+          "article_id": "4035604",
+          "category": "health",
+          "created_at": "2026-10-14 22:00:00",
+          "author": "å¨ç¥è±",
+          "body_chars": 3312,
+          "body_sha256": "ccbb3d5a0a15aa7c0cc62fb117c7de9fb04ca8ede694607aae54bb72a2c417f7",
+          "body_lead": "é£çºåææéèº«é«ä¸é©ï¼è¨±å¤æ°ç¾ç¿æ£ç´å¥å¤§é«é¢æ¥è¨ºï¼å°è´æ¥è¨ºå®¤å¤§å¡è»ã",
+          "valid": true
+        },
+        {
+          "url": "https://news.tvbs.com.tw/money/4036175",
+          "listing_category": "money",
+          "title": "ç¾CPIè¶éæï¼ç¾åµæ®å©ççé£ãå°ææå¤ç¤ç´ç¿»é»è·é¾4ç¾é»",
+          "article_id": "4036175",
+          "category": "money",
+          "created_at": "2026-10-14 22:09:47",
+          "author": "èéå©·",
+          "body_chars": 1051,
+          "body_sha256": "78b1a0726a27374ddecd51ab9b6c1dbd0e160a1e64984c8baa8deea972ce1108",
+          "body_lead": "ç¾ååå·¥é¨14æ¥å¬å¸9ææ¶è²»èç©å¹ææ¸ï¼CPIï¼æå¢0.6%ï¼ç¬¦åå¸å ´é æï¼å¹´å¢",
+          "valid": true
+        }
+      ],
+      "url_count": 16,
+      "listing_categories": {
+        "life": 6,
+        "local": 2,
+        "esg": 2,
+        "health": 2,
+        "cars": 2,
+        "world": 1,
+        "money": 1
+      },
+      "valid_count": 6
+    },
+    {
+      "source": "thenewslens",
+      "crawler": "TheNewsLens",
+      "articles": [
+        {
+          "url": "https://www.thenewslens.com/article/270568",
+          "listing_category": " ",
+          "title": "川普爆阿拉斯加天然氣投資案：台灣積極評估、韓國硬槓否認，兩國反應為何大不同？",
+          "article_id": "270568",
+          "category": "能源",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "TNL國際編譯",
+          "body_chars": 614,
+          "body_sha256": "c092e6e8a09d7531fc78b321238f11754bc91aa7f0108f9ddcfd2cb28f2106f5",
+          "body_lead": "美國總統川普（Donald Trump）13日前往阿拉斯加州（Alaska），為共和黨候選人站台造勢，並宣布一項與台灣有關的重大能源合作計畫。\n他宣稱，台灣已同意在未來20年內，購買阿拉斯加液化天然氣",
+          "valid": true
+        },
+        {
+          "url": "https://www.thenewslens.com/article/270569",
+          "listing_category": " ",
+          "title": "俄羅斯干預2016脫歐公投？英國首相柏南提證言，不排除讓全民決定「重返歐盟」",
+          "article_id": "270569",
+          "category": "歐洲",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "TNL國際編譯",
+          "body_chars": 793,
+          "body_sha256": "494412bbea5b2a1aaa8ab25fc5a810659fe53d84f52dfdf9fff778e8b106ecdc",
+          "body_lead": "英國首相柏南（Andy Burnham），10月12日在國會下議院發表聲明，表示俄羅斯的「混合攻擊」（hybrid attacks）與干預他國選舉的行動，凸顯英國必須與歐盟建立更緊密的關係，若不這麼做",
+          "valid": true
+        },
+        {
+          "url": "https://www.thenewslens.com/article/270559",
+          "listing_category": " ",
+          "title": "從「淨灘」到「淨港」！台灣麒麟深耕10年海洋行動，以CSV共創商業與環境永續價值",
+          "article_id": "270559",
+          "category": "環境",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "",
+          "body_chars": 2385,
+          "body_sha256": "63b834f55deff56ea09616e19a13339ced627632dd5e7899a97cf49bfdc7db32",
+          "body_lead": "文：陳怡如\n漁港邊，海風吹來微鹹氣息，一艘造型俐落的無人海廢清潔船「湛鬥機」，正輕巧穿梭海面蒐集垃圾。\n不同於傳統依賴人力在危險海面用網具打撈，這台搭載智慧通訊和水下輸送帶的電動機具，可將各種隨潮汐漂",
+          "valid": true
+        },
+        {
+          "url": "https://www.thenewslens.com/article/270562",
+          "listing_category": " ",
+          "title": "Getty Images下市、走向破產重整：被AI打敗的圖庫霸主，為何倒在債務與官司上？",
+          "article_id": "270562",
+          "category": "商業",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "TNL國際編譯",
+          "body_chars": 892,
+          "body_sha256": "fad47d6a972412b9f7b6b758161b7502f015d4dc5c781cb0225a0ef20eb40391",
+          "body_lead": "全球最大影像授權商之一Getty Images的普通股，10月13日正式自紐約證券交易所下市。紐交所9月29日以股價「異常低」為由立即暫停交易，Getty表明不提上訴，股票從9月30日起改在場外市場交",
+          "valid": true
+        },
+        {
+          "url": "https://www.thenewslens.com/article/270550",
+          "listing_category": " ",
+          "title": "川普放寬俄羅斯柴油制裁換取「能源停火」：美歐盟友為何反彈？基輔為何拒絕買單？",
+          "article_id": "270550",
+          "category": "國際",
+          "created_at": "2026-10-13 00:00:00",
+          "author": "TNL國際編譯",
+          "body_chars": 808,
+          "body_sha256": "1a07a73e1444c55ab759c357beae54523859ea0269f8264f38b048a2d6ec9cec",
+          "body_lead": "美國總統川普（Donald Trump）日前宣布，俄羅斯與烏克蘭「能源停火」。不過，川普為了促成停火而與俄羅斯總統普亭（Vladimir Putin）達成的柴油供應協議，此說法在美國政壇與歐洲盟友間也",
+          "valid": true
+        },
+        {
+          "url": "https://www.thenewslens.com/article/270316",
+          "listing_category": " ",
+          "title": "質感生活必備！一家四口與三貓的三菱電機空調實測，完美居家神隊友",
+          "article_id": "270316",
+          "category": "",
+          "created_at": "2026-10-08 00:00:00",
+          "author": "",
+          "body_chars": 2140,
+          "body_sha256": "0206c0c89c56b83dac32d2529a8882b35e6c9e7add26fcbb542bfee69ba8ea01",
+          "body_lead": "擁有醫療專業背景的人，對於居家環境的健康與衛生，往往有著比一般人更嚴苛的標準。近期搬入台北民生社區的屋主 Dory 就是如此。為了給一雙兒女和三隻愛貓最舒適的成長環境，她與同樣任職醫療產業的先生，用心",
+          "valid": true
+        }
+      ],
+      "url_count": 30,
+      "listing_categories": {
+        " ": 30
+      },
+      "valid_count": 6
+    },
+    {
+      "source": "聯合報",
+      "crawler": "United",
+      "articles": [
+        {
+          "url": "https://udn.com/news/story/7333/9815224",
+          "listing_category": " ",
+          "title": "中國9月新增人民幣貸款高於預期 分析：刺激措施可能發揮作用",
+          "article_id": "7333/9815224",
+          "category": "兩岸",
+          "created_at": "2026-10-14 22:37",
+          "author": "中央社／ 台北14日電",
+          "body_chars": 647,
+          "body_sha256": "02c395f65db616faa93ae02dd9da488715bb522cecb96e289d9c7833b9639006",
+          "body_lead": "中國人民銀行（中國央行）今天公布，今年前3季人民幣貸款增加11.52兆元（約新台幣55.27兆元），據路透社計算，9月新增人民幣貸款1.08兆元，高於市場預期，認為貸款回升顯示中國近期推出新一輪刺激措",
+          "valid": true
+        },
+        {
+          "url": "https://udn.com/news/story/6809/9815221",
+          "listing_category": " ",
+          "title": "諾貝爾和平獎得主皮萊批川普制裁ICC 要他去了解國際法",
+          "article_id": "6809/9815221",
+          "category": "全球",
+          "created_at": "2026-10-14 22:33",
+          "author": "中央社／ 海牙14日綜合外電報導",
+          "body_chars": 812,
+          "body_sha256": "31d6b6d4b3c36114641d32998c940a7e7b3fa520c03f0dbda282ddedbede31b4",
+          "body_lead": "諾貝爾和平獎得主皮萊（Navi Pillay）今天抨擊美國總統川普（DonaldTrump）針對國際刑事法院（ICC）的「非法」制裁，表示川普需要上一堂國際法的課。\n皮萊在接受法新社專訪時也提到，在她",
+          "valid": true
+        },
+        {
+          "url": "https://udn.com/news/story/6809/9815216",
+          "listing_category": " ",
+          "title": "北溪爆炸案烏克蘭前軍官德國受審 恐衝擊德烏關係",
+          "article_id": "6809/9815216",
+          "category": "全球",
+          "created_at": "2026-10-14 22:31",
+          "author": "中央社／ 漢堡14日綜合外電報導",
+          "body_chars": 1279,
+          "body_sha256": "a47c9438087b36d0e252f20accbc60ea02563bb9259f3ea4257b5a7367ae8c45",
+          "body_lead": "一名烏克蘭前軍官在德國漢堡（Hamburg）出庭受審。他遭控參與戰後歐洲歷史上最大膽破壞行動之一的2022年北溪天然氣管線攻擊事件。\n英國「衛報」（The Guardian）報導，檢方指控現年50歲烏",
+          "valid": true
+        },
+        {
+          "url": "https://udn.com/news/story/6811/9815215",
+          "listing_category": " ",
+          "title": "不怕槓上歐盟！英國拒跟進大陸電動車關稅 保護賓利等豪車出口",
+          "article_id": "6811/9815215",
+          "category": "全球",
+          "created_at": "2026-10-14 22:29",
+          "author": "中央社／ 倫敦14日專電",
+          "body_chars": 1984,
+          "body_sha256": "93dca116160e3a5ed2dbdaa04f967e3ffb5a74a8788f47f6153b4922300cd845",
+          "body_lead": "英國商業、創新、科學暨貿易大臣雷諾茲說，英國不會迫於來自歐盟的壓力，對中國電動車加徵進口關稅。他強調，英國就貿易防衛措施採取任何決策時，依據的是英國的國家利益，「而不是因為有任何國家提出要求」。\n歐盟",
+          "valid": true
+        },
+        {
+          "url": "https://udn.com/news/story/7333/9815213",
+          "listing_category": " ",
+          "title": "分析：油價高 推升中國9月CPI漲幅擴大",
+          "article_id": "7333/9815213",
+          "category": "兩岸",
+          "created_at": "2026-10-14 22:23",
+          "author": "中央社／ 上海14日電",
+          "body_chars": 702,
+          "body_sha256": "8a2e3f8f844918ee5925c87b657a74d5f8e2f18f379c1688194a1034d76c512c",
+          "body_lead": "中國國家統計局今天公布9月消費者物價指數（CPI），年增率漲幅比8月擴大。經濟專家分析，9月中東局勢造成國際油價再上漲，油價漲幅擴大，是推動當月整體CPI年增率漲幅略有擴大的主因。\n中國國家統計局公布",
+          "valid": true
+        },
+        {
+          "url": "https://udn.com/news/story/6811/9815219",
+          "listing_category": " ",
+          "title": "波克夏加碼入股 這檔科技股一度噴高55%",
+          "article_id": "6811/9815219",
+          "category": "全球",
+          "created_at": "2026-10-14 22:23",
+          "author": "經濟日報／ 編譯陳苓／綜合外電",
+          "body_chars": 301,
+          "body_sha256": "287e149ce69c32ba2fd003523af9182046edf7a63e6f8771093bfa09da437a0e",
+          "body_lead": "波克夏公司同意對義大利科技集團Bending Spoons，額外投資3.3億美元，消息激勵該公司14日美國股價一度噴高55%。\n\n波克夏7月才斥資6億美元，支持Bending Spoons在美國掛牌，",
+          "valid": true
+        }
+      ],
+      "url_count": 20,
+      "listing_categories": {
+        " ": 20
+      },
+      "valid_count": 6
+    },
+    {
+      "source": "iThome",
+      "crawler": "iThome",
+      "articles": [
+        {
+          "url": "https://www.ithome.com.tw/news/179698",
+          "listing_category": " ",
+          "title": "烏克蘭接連襲擊Yandex三座資料中心，俄羅斯多項網路服務中斷",
+          "article_id": "179698",
+          "category": "新聞",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "張明德",
+          "body_chars": 395,
+          "body_sha256": "11098f69229ea7b48fb2c70e43bd6797373d6cb1943c0c2697d3a8628086b810",
+          "body_lead": "俄羅斯主要網路服務業者Yandex，過去一週內有三座資料中心接連遭到烏克蘭無人機攻擊，造成雲端服務及多項網路服務中斷。依據The Record的報導，這三波攻擊發生在10月7日至8日深夜，10月9日，",
+          "valid": true
+        },
+        {
+          "url": "https://www.ithome.com.tw/news/179697",
+          "listing_category": " ",
+          "title": "MITRE ATT&CK第20版登場，新增提示注入、AI輔助資料外洩等攻擊技術",
+          "article_id": "179697",
+          "category": "新聞",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "羅正漢",
+          "body_chars": 991,
+          "body_sha256": "9e86e90ff2d14af7f8609fcca3d97201be2f520bf7c311c4f82bf9ec8e1a9311",
+          "body_lead": "美國非營利組織MITRE在10月13日發布MITRE ATT&CK v20，本次更新的一大重點是新增多項與AI相關的攻擊技術，包括提示注入、AI輔助資料外洩及AI結果污染等，並擴充其他攻擊手法、駭客組",
+          "valid": true
+        },
+        {
+          "url": "https://www.ithome.com.tw/news/179660",
+          "listing_category": " ",
+          "title": "Ledger加密錢包設備遭植入隱藏晶片，影響範圍已從亞洲擴及歐洲",
+          "article_id": "179660",
+          "category": "新聞",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "周峻佑",
+          "body_chars": 565,
+          "body_sha256": "87123f850f094891fa9ec7271f82d2c213fbed2be131b168f0e58c079c1fbb49",
+          "body_lead": "上週硬體加密貨幣錢包設備Ledger驚傳被植入間諜元件，導致用戶資產遭到洗劫，設備製造商Ledger定調是從經銷商CryptoBillis售出的裝置有問題，近90天向其購買加密貨幣錢包設備的東南亞用戶",
+          "valid": true
+        },
+        {
+          "url": "https://www.ithome.com.tw/news/179681",
+          "listing_category": " ",
+          "title": "金管會擬推出金融業代理AI安全指引，先公布諮詢文件徵詢意見，聚焦安全治理、風險分級與權限控管",
+          "article_id": "179681",
+          "category": "新聞",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "羅正漢",
+          "body_chars": 1055,
+          "body_sha256": "13c0cc57e2757d5e1d347cc845a105907ada0ee75de8e9f143c27bcaa9761301",
+          "body_lead": "針對金融業導入代理AI的風險，金融監督管理委員會（金管會）10月13日宣布公開「金融業運用代理AI安全諮詢文件」，提出安全治理、風險分級及安全控管三大面向的建議，並公開徵詢各界意見30天。該文件強調以",
+          "valid": true
+        },
+        {
+          "url": "https://www.ithome.com.tw/news/179686",
+          "listing_category": " ",
+          "title": "AWS Lambda推出Web Functions，Node.js網頁服務可直接部署",
+          "article_id": "179686",
+          "category": "新聞",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "李建興",
+          "body_chars": 1018,
+          "body_sha256": "3969c0690a0dd83cc857544b235637fa1d596324ad5b3ed1b02b60b86343a40a",
+          "body_lead": "AWS Lambda新增Web Functions，開發者可直接將使用Express、Hono、Fastify及Next.js等框架開發的Node.js網頁服務部署至Lambda，不必改寫成事件處理函",
+          "valid": true
+        },
+        {
+          "url": "https://www.ithome.com.tw/news/179689",
+          "listing_category": " ",
+          "title": "Character.AI聲請破產保護，迪士尼出價2,000萬美元收購部分資產",
+          "article_id": "179689",
+          "category": "新聞",
+          "created_at": "2026-10-14 00:00:00",
+          "author": "陳曉莉",
+          "body_chars": 1272,
+          "body_sha256": "de9f2d8b61b2563a93f3d58bbdeeca18e997b52ae3e6b53c5c745b588fa22664",
+          "body_lead": "美國AI角色聊天平臺Character.AI周一（10/12）宣布，已向德拉瓦州聯邦破產法院聲請《破產法》第11章破產保護，尋求出售全部或絕大部分資產。迪士尼（Disney）旗下Disney Worl",
+          "valid": true
+        }
+      ],
+      "url_count": 12,
+      "listing_categories": {
+        " ": 12
+      },
+      "valid_count": 6
+    }
+  ]
+}

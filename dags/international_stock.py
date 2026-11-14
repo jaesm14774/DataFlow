@@ -32,6 +32,8 @@ class StockInternationalCollectProcess(StockCollectLogic):
     
     def transform_time(self,x,now_year):
         raw_time=str(x).strip()
+        if raw_time in {'-','--'}:
+            return None
         candidates=[
             (raw_time,'%Y/%m/%d %H:%M'),
             (raw_time,'%Y-%m-%d %H:%M'),
@@ -50,17 +52,47 @@ class StockInternationalCollectProcess(StockCollectLogic):
         爬蟲程式
         """
         #抓取yahoo國際股市
-        a=requests.get('https://tw.stock.yahoo.com/world-indices',headers=self.headers, timeout=20)
-        soup=BeautifulSoup(a.text,'lxml')
-                
-        #yahoo網頁幾乎class都是很怪的標籤(可能隨時間變動)，因此採取笨方法，易錯
-        col_name=[s.text.strip() for s in soup.find(class_='table-header-wrapper').find_all('div') if s.text.strip() != '']
-        col_name=col_name[1:]
+        response=requests.get('https://tw.stock.yahoo.com/world-indices',headers=self.headers, timeout=20)
+        response.raise_for_status()
+        soup=BeautifulSoup(response.text,'lxml')
 
-        data=[[sub_part.text.strip() for sub_part in part.find_all('span') if sub_part.text.strip() != ''] \
-            for part in soup.find(class_='table-body-wrapper').find_all('li',class_='List(n)')]
-        
-        data=[[s[0]]+s[2:] for s in data] #捨棄股票代碼
+        required_columns={
+            '股名/股號','股價','漲跌','漲跌幅(%)','買進','賣出','開盤','昨收',
+            '最高','最低','成交量(股)','時間(CST)'
+        }
+        table=None
+        col_name=None
+        for candidate in soup.find_all('table'):
+            header_row=candidate.find('tr')
+            if header_row is None:
+                continue
+            candidate_columns=[cell.get_text(strip=True)
+                               for cell in header_row.find_all(['th','td'],recursive=False)]
+            if required_columns.issubset(candidate_columns):
+                table=candidate
+                col_name=candidate_columns
+                break
+        if table is None:
+            raise ValueError('Yahoo world indices table is missing required columns')
+
+        data=[]
+        for row in table.find_all('tr')[1:]:
+            cells=row.find_all(['th','td'],recursive=False)
+            if not cells:
+                continue
+            if len(cells) != len(col_name):
+                raise ValueError(
+                    f'Unexpected Yahoo world indices row width: '
+                    f'expected {len(col_name)}, got {len(cells)}'
+                )
+            stock_name=cells[0].find('span')
+            if stock_name is None:
+                raise ValueError('Yahoo world indices row is missing its index name')
+            data.append([stock_name.get_text(strip=True)]+
+                        [cell.get_text(strip=True) for cell in cells[1:]])
+        if not data:
+            raise ValueError('Yahoo world indices table contains no index rows')
+
         data=pd.DataFrame(data,columns=col_name)
         data.drop(['買進','賣出'],axis=1,inplace=True)
         data=data.rename(columns={

@@ -67,6 +67,14 @@ class StockCollectLogic(MySQLConnection):
         self.log_record.set_before_count(before_count)
         self.aws_client=boto3.client('lambda',aws_access_key_id=aws_access_key_id,
                                      aws_secret_access_key=aws_secret_key,region_name='us-east-1')
+
+    def end(self):
+        try:
+            http_session = getattr(self, 'http_session', None)
+            if http_session is not None:
+                http_session.close()
+        finally:
+            super().end()
     
     def simulate_request(self,event):
         """
@@ -694,7 +702,11 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
         self._type=_type
         self.log_record.app_name=self.log_record.app_name+f'-{_type}'
         self.really_date=pd.read_sql_query(self.really_date_sql,self.engine).iloc[0,0]
-        self.all_code_info=pd.read_sql_query('select * from 全證券代碼相關資料表',self.engine)
+        self.all_code_info=pd.read_sql_query(
+            'select 證券代號, 市場別 from 全證券代碼相關資料表', self.engine
+        )
+        self.http_session = requests.Session()
+        self.http_session.headers.update(self.headers)
         if self._type == 'tpex':
             self._diff_table_name='股票模板_diff2'
     
@@ -710,7 +722,7 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
     
     def twse_crawler(self, time_format, code):
         url=f'https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={time_format}&stockNo={code}'
-        a=requests.get(url,headers=self.headers,timeout=30)
+        a=self.http_session.get(url,timeout=30)
         a=a.json()
 
         #column name
@@ -727,9 +739,6 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
         d1['資料日期']=d1['資料日期'].map(self.make_regular_date_format)
         for col in self.numeric_col:
             d1[col]=d1[col].apply(self.clean_comma,output_not_string=True) 
-        d1.loc[:,self._select_columns].to_sql(self._diff_table_name,self.engine,index=0,if_exists='append')
-        print(f'[個股成交-上市] 證券代號={code} | 已寫入 diff')
-        
         return d1
         
     def collect_twse(self):
@@ -790,8 +799,7 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
         col_name=['資料日期','成交量','成交金額','開盤','最高','最低','收盤','漲跌','成交筆數']
         
         url='https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock'
-        response=requests.post(url, timeout=20,
-                    headers=self.headers, data={
+        response=self.http_session.post(url, timeout=20, data={
                         'code': code,
                         'date': time_format,
                         'response': 'json'
@@ -808,9 +816,6 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
         d2=d2.loc[:,['證券代號', '資料日期', '開盤', '最高', '最低', '收盤','成交量']]
         d2['資料日期']=d2['資料日期'].map(self.make_regular_date_format)
         d2=d2.sort_values(['資料日期'],ascending=False)
-        d2.loc[:,self._select_columns].to_sql(self._diff_table_name,self.engine,index=0,if_exists='append')
-        print(f'[個股成交-上櫃] 證券代號={code} | 已寫入 diff')
-        
         return d2
     
     def collect_tpex(self):
@@ -838,6 +843,12 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
         if len(self.result)>0:
             result=pd.concat(self.result).reset_index(drop=True)
             result=result.replace('--',np.nan)
+            result.loc[:,self._select_columns].to_sql(
+                self._diff_table_name,
+                self.engine,
+                index=False,
+                if_exists='append',
+            )
             #delete already exist data in 個股成交資訊
             delete_sql=f"""
             delete tb from {self.table_name} as tb
@@ -1000,9 +1011,7 @@ class StockDayTradeCollectProcess(StockCollectLogic):
         s=s[:q]
         s=re.sub(string=s,pattern=r'=|\r+',repl='')
         
-        with open(temp_file_path+'day_trader.csv','w',encoding='utf_8_sig') as h:
-            h.write(s)
-        d1=pd.read_csv(temp_file_path+'day_trader.csv',encoding='utf_8_sig')
+        d1=pd.read_csv(StringIO(s))
         d1['資料日期']=self.really_date.strftime('%Y-%m-%d')
         select_column=['資料日期','證券代號', '證券名稱',
                        '當日沖銷交易成交股數', '當日沖銷交易買進成交金額',
@@ -1209,15 +1218,18 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
         
     #證交所-券商分點
     def geo_broker_twse(self,code):
+        with requests.Session() as session:
+            return self._geo_broker_twse_with_session(session, code)
+
+    def _geo_broker_twse_with_session(self, session, code):
         #去證交所下載驗證碼
-        session=requests.session()
         response=session.get('https://bsr.twse.com.tw/bshtm/bsMenu.aspx',headers=self.headers,
                     timeout=60,verify=False)
         soup=BeautifulSoup(response.text,'lxml')
 
         img_url='https://bsr.twse.com.tw/bshtm/'+[s.get('src') for s in soup.find_all('img') if bool(re.search(string=str(s),pattern=r'CaptchaImage'))][0]
         with open(img_path, 'wb') as f:
-            resp = session.get(img_url, stream=True)
+            resp = session.get(img_url, stream=True, timeout=60)
             resp.raw.decode_content = True
             shutil.copyfileobj(resp.raw, f)
         
@@ -1262,8 +1274,6 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
         except Exception as e:
             print(f'[券商進出-證交所] 證券代號={code} | 解析頁面失敗 | {type(e).__name__}: {e}')
             return '沒有資料，請檢查'
-        
-        session.close()
         
         return T
 
@@ -1673,8 +1683,12 @@ class StockMarginTradeCollectProcess(StockCollectLogic):
 
     def __init__(self):
         super().__init__()
-        all_code_info=pd.read_sql_query('select * from 全證券代碼相關資料表',self.engine)
+        all_code_info=pd.read_sql_query(
+            'select 證券代號 from 全證券代碼相關資料表', self.engine
+        )
         self.all_code=all_code_info.證券代號.tolist()
+        self.http_session = requests.Session()
+        self.http_session.headers.update(self.headers)
 
     def get_margin_data(self,code):
         """
@@ -1683,7 +1697,7 @@ class StockMarginTradeCollectProcess(StockCollectLogic):
         """
         url=f'https://concords.moneydj.com/z/zc/zcn/zcn_{code}.djhtm'
 
-        a=requests.get(url,headers=self.headers,timeout=self.timeout)
+        a=self.http_session.get(url,timeout=self.timeout)
 
         soup=BeautifulSoup(a.text,'lxml')
 

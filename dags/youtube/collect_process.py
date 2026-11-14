@@ -50,27 +50,73 @@ class YoutubeCrawler():
             select id, channel_id, name, crawler_page 
             from youtube_channel where status=1
         """,engine)
+        self.http_session = requests.Session()
         self.delete_count = 0
         self.insert_count = 0
+
+    def _get_json(self, url):
+        response = self.http_session.get(url, timeout=20)
+        payload = response.json()
+        self.n_query += 1
+        return payload
 
     #抓取頻道資訊
     def get_channel_info(self,channel_id):
         self.channel_id=channel_id
         
-        youtube_key=random.choice(self.youtube_key_list)
-        
         domain_url=self.domain_url
-        
-        url=f'{domain_url}/channels?part={"snippet,statistics"}&id={channel_id}&key={youtube_key}'
 
-        #get json format of channel info
-        a=requests.get(url, timeout=20).json()
-        
+        # Each API key has its own daily quota; when one is exhausted try the
+        # remaining keys before failing the whole collection.
+        keys = list(self.youtube_key_list)
+        if not keys:
+            raise RuntimeError('YouTube Data API key list is empty')
+        a = {}
+        response = None
+        random.shuffle(keys)
+        for key_index, youtube_key in enumerate(keys):
+            url=f'{domain_url}/channels?part={"snippet,statistics"}&id={channel_id}&key={youtube_key}'
+
+            #get json format of channel info
+            response = self.http_session.get(url, timeout=20)
+            a = response.json()
+            error = a.get('error') if isinstance(a, dict) else None
+            quota_exhausted = (
+                isinstance(error, dict)
+                and error.get('code') == 403
+                and 'quota' in str(error.get('message', '')).lower()
+            )
+            if quota_exhausted and key_index < len(keys) - 1:
+                self.n_query = self.n_query + 1
+                print(f'[Youtube] API key 配額用盡，改用下一把 key（{key_index + 1}/{len(keys)}）')
+                continue
+            break
+
+        if not isinstance(a, dict):
+            raise ValueError('YouTube Data API channels.list response must be a JSON object')
+
         self.n_query=self.n_query+1
+
+        if 'error' in a:
+            error = a['error']
+            error_code = error.get('code', 'unknown') if isinstance(error, dict) else 'unknown'
+            error_message = error.get('message', 'unknown API error') if isinstance(error, dict) else 'unknown API error'
+            raise RuntimeError(
+                f'YouTube Data API channels.list failed | '
+                f'code={error_code} message={error_message}'
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f'YouTube Data API channels.list failed | '
+                f'http_status={response.status_code}'
+            )
+        page_info = a.get('pageInfo')
+        if not isinstance(page_info, dict) or 'totalResults' not in page_info:
+            raise ValueError('YouTube Data API channels.list response is missing pageInfo.totalResults')
         
-        if a['pageInfo']['totalResults'] == 0:
+        if page_info['totalResults'] == 0:
             print(f'[Youtube] API 查無頻道（ID 錯誤或已刪）| channel_id={channel_id}')
-        elif a['pageInfo']['totalResults'] == 1:
+        elif page_info['totalResults'] == 1:
             #channel basic info
 
             a=a['items'][0]
@@ -138,13 +184,10 @@ class YoutubeCrawler():
         
         domain_url=self.domain_url
         
-        session=requests.session()
         #首先須先拿到upload_id
         url=f'https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id={channel_id}&key={youtube_key}'
 
-        a=session.get(url).json()
-        
-        self.n_query=self.n_query+1
+        a=self._get_json(url)
 
         #沒有上傳任何影片
         if 'items' not in a.keys():
@@ -172,9 +215,7 @@ class YoutubeCrawler():
         while n_page<= max_page:
 
             if n_page == 1:
-                a=session.get(url).json()
-                
-                self.n_query=self.n_query+1
+                a=self._get_json(url)
 
                 #假設發生錯誤
                 if 'error' in a.keys():
@@ -191,9 +232,7 @@ class YoutubeCrawler():
                     max_page=temp_n
             else:
                 if nextPageToken is not None:
-                    a=session.get(f'{url}&pageToken={nextPageToken}').json()
-                    
-                    self.n_query=self.n_query+1
+                    a=self._get_json(f'{url}&pageToken={nextPageToken}')
                 else: #沒有下一頁
                     deter=1
 
@@ -232,9 +271,7 @@ class YoutubeCrawler():
         for vid_r in video_r:
             url=f'{domain_url}/videos?key={youtube_key}&part=snippet,statistics,contentDetails&id={vid_r}'
 
-            a=requests.get(url, timeout=20).json()
-            
-            self.n_query=self.n_query+1
+            a=self._get_json(url)
             
             for part in a['items']:
                 #video info
@@ -327,8 +364,6 @@ class YoutubeCrawler():
 
         url=f'{domain_url}/commentThreads?key={youtube_key}&part=snippet&videoId={video_id}&maxResults={max_result}&textFormat=plainText&order=time'
 
-        session=requests.session()
-
         if max_page is None:
             max_page=99999
 
@@ -341,14 +376,11 @@ class YoutubeCrawler():
         #依據頁數，收集留言
         while n_page<= max_page:
             if n_page == 1:
-                a=session.get(url).json()
-                
-                self.n_query=self.n_query+1
+                a=self._get_json(url)
                 # 註:youtube在commentthread沒有提供正確的result count，因此無法找到最終頁數，更新max_page
             else:
                 if nextPageToken is not None:
-                    a=session.get(f'{url}&pageToken={nextPageToken}').json()
-                    self.n_query=self.n_query+1
+                    a=self._get_json(f'{url}&pageToken={nextPageToken}')
                 else: #沒有下一頁
                     deter=1
 
@@ -426,8 +458,6 @@ class YoutubeCrawler():
         max_result=100
         url=f'{domain_url}/comments?key={youtube_key}&part=snippet&maxResults={max_result}&parentId={parent_id}&textFormat=plainText'
 
-        session=requests.session()
-
         if max_page is None:
             max_page=99999
 
@@ -440,14 +470,11 @@ class YoutubeCrawler():
         #依據頁數，收集留言的留言
         while n_page<= max_page:
             if n_page == 1:
-                a=session.get(url).json()
-                
-                self.n_query=self.n_query+1
+                a=self._get_json(url)
                 # 註:youtube在commentthread沒有提供正確的result count，因此無法找到最終頁數，更新max_page
             else:
                 if nextPageToken is not None:
-                    a=session.get(f'{url}&pageToken={nextPageToken}').json()
-                    self.n_query=self.n_query+1
+                    a=self._get_json(f'{url}&pageToken={nextPageToken}')
                 else: #沒有下一頁
                     deter=1
 
@@ -673,6 +700,7 @@ class YoutubeCrawler():
             print(f'[Youtube] 失敗 | {type(e).__name__}: {e}')
             raise e        
         finally:
+            self.http_session.close()
             log_record.insert_to_log_record()
             conn.close()
             engine.dispose()

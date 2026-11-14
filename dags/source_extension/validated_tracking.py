@@ -22,6 +22,15 @@ ROUND_TRIP_COST_PCT = 0.6
 MIN_SETTLED_FOR_VERDICT = 60
 NO_PRICE_GRACE_SESSIONS = 3
 
+# Intraday announcement alerts were switched off because nothing showed they help.
+# Their candidates are still tracked here as never-pushed "shadow picks" so the
+# scorecard can show whether silencing them cost anything.
+SHADOW_INTRADAY_RULE = {
+    "id": "intraday_announcement_shadow",
+    "horizon_sessions": 10,
+    "params": {"min_turnover_ntd": 50_000_000, "max_names_shown": 0},
+}
+
 
 def record_picks(
     cursor, *, rule: dict[str, Any], version: str, as_of_date: dt.date,
@@ -50,13 +59,52 @@ def record_picks(
     return inserted
 
 
+def _as_date(value) -> dt.date:
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    return dt.date.fromisoformat(str(value)[:10])
+
+
+def record_shadow_candidates(
+    cursor, *, rule: dict[str, Any], version: str, candidates: list[dict[str, Any]],
+    now: dt.datetime,
+) -> int:
+    """Store suppressed intraday candidates (never pushed) for later settlement.
+
+    Direction is not scored (many announcements are direction-neutral), so the
+    result answers "did announced stocks beat the market at all", nothing more.
+    """
+
+    inserted = 0
+    for rank, row in enumerate(candidates, start=1):
+        cursor.execute(
+            """
+            INSERT IGNORE INTO validated_signal_picks
+                (rule_id, rule_version, as_of_date, entity_id, security_name,
+                 signal_close, volume_ratio, signal_keys, rank_in_digest, shown,
+                 horizon_sessions, status, created_at)
+            VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, 0, %s, 'pending', %s)
+            """,
+            (
+                rule["id"], version, _as_date(row["as_of_date"]), str(row["entity_id"]),
+                (row.get("security_name") or None), str(row.get("signal_keys") or "")[:255],
+                rank, int(rule["horizon_sessions"]), now,
+            ),
+        )
+        inserted += int(getattr(cursor, "rowcount", 0) or 0)
+    return inserted
+
+
 def compute_pick_outcomes(
     prices: pd.DataFrame, picks: list[dict[str, Any]], *, horizon: int, min_turnover_ntd: float,
 ) -> list[dict[str, Any]]:
     """Settle picks whose exit session exists.
 
-    Entry is the close of the session after ``as_of_date`` and exit is ``horizon``
-    sessions later, exactly as in the backtest. The benchmark is the mean return of
+    Entry is the close of the session after ``as_of_date`` (the last session on or
+    before it when the date is a weekend/holiday, as for announcements) and exit is
+    ``horizon`` sessions later, exactly as in the backtest. The benchmark is the mean return of
     the 4-digit names that were liquid on the signal date over the same window.
     """
 
@@ -73,8 +121,8 @@ def compute_pick_outcomes(
     outcomes: list[dict[str, Any]] = []
     for pick in picks:
         signal_ts = pd.Timestamp(pick["as_of_date"])
-        pos = int(sessions.searchsorted(signal_ts))
-        if pos >= len(sessions) or sessions[pos] != signal_ts:
+        pos = int(sessions.searchsorted(signal_ts, side="right")) - 1
+        if pos < 0:
             continue
         entry_pos, exit_pos = pos + 1, pos + 1 + horizon
         if exit_pos >= len(sessions):
@@ -207,6 +255,19 @@ def tracking_line(summary: dict[str, Any], rule: dict[str, Any]) -> str:
     return text
 
 
+def shadow_line(summary: dict[str, Any]) -> str:
+    if not summary["settled"]:
+        return (
+            f"被關掉的盤中公告快訊：已記錄 {summary['pending']} 檔，尚未結算；"
+            "結算後會在這裡顯示它們有沒有跑贏大盤，用來判斷關掉是否正確。"
+        )
+    return (
+        f"被關掉的盤中公告快訊（不分多空）：已結算 {summary['settled']} 檔，平均比同期全市場 "
+        f"{summary['mean_excess_pct']:+.2f}%（扣成本 {summary['mean_excess_after_cost_pct']:+.2f}%）。"
+        "接近 0 或為負代表關掉沒有損失。"
+    )
+
+
 def weekly_scorecard(
     ledger_cursor, *, today: dt.date, policy_start: dt.date, rule: dict[str, Any],
 ) -> dict[str, Any]:
@@ -234,6 +295,7 @@ def weekly_scorecard(
         "after_week": after,
         "after_days": (today - after_start).days + 1,
         "live": live_summary(ledger_cursor, rule["id"]),
+        "shadow": live_summary(ledger_cursor, SHADOW_INTRADAY_RULE["id"]),
     }
 
 
@@ -244,5 +306,6 @@ def scorecard_embed(card: dict[str, Any], rule: dict[str, Any]) -> dict[str, Any
         f"送不出去：每週 {before['failed']:.0f} 則 → 本週 {after['failed']} 則",
         f"「未能產出」通知：每週 {before['failure_notices']:.0f} 則 → 本週 {after['failure_notices']} 則",
         tracking_line(card["live"], rule),
+        shadow_line(card["shadow"]),
     ]
     return {"title": "本週追蹤：這些改動有沒有變好", "description": "\n".join(lines), "color": 0x8E44AD}

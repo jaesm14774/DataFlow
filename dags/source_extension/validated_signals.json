@@ -1,7 +1,7 @@
 {
   "version": "validated_v1",
   "validated_on": "2026-11-14",
-  "policy_started_on": "2026-11-14",
+  "policy_started_on": "2026-11-15",
   "report": "docs/signal_validation_report_20261114.md",
   "note": "Only rules with status 'active' may be pushed to Discord. Set status to 'retired' to demote a rule; everything else stays in the ledger only.",
   "rules": [

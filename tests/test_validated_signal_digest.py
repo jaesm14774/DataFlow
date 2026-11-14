@@ -94,11 +94,14 @@ def test_digest_with_hits_states_evidence_limits_and_fits_discord_budget():
         AS_OF, validated_signals.load_registry(), detection, names
     )
     text = "".join(e["description"] for e in embeds)
+    rule = next(iter(validated_signals.active_rules(validated_signals.load_registry())))
+    shown_limit = rule["params"]["max_names_shown"]
     assert "通過驗證的訊號 12 檔" in message
-    assert text.count("**1000 ") + text.count("**1001 ") == 2
-    assert "另有 7 檔" in text  # 12 hits, 5 shown
+    assert sum(1 for hit in hits if f"**{hit['code']} " in text) == shown_limit
+    assert f"另有 {12 - shown_limit} 檔" in text
     assert "不是明牌" in text and "不構成投資建議" in text
-    assert "+0.17%" in text  # after-cost edge is disclosed, not just the headline
+    # the after-cost edge is disclosed, not just the headline number
+    assert f"{rule['evidence']['mean_excess_after_cost_pct']:+.2f}%" in text
     assert market_signals._discord_request_size(message, embeds) <= market_signals.DISCORD_REQUEST_BYTE_LIMIT
     assert len(market_signals._split_discord_embed_batches(message, embeds)) == 1
 
@@ -252,3 +255,65 @@ def validated_tracking_summary():
     from source_extension import validated_tracking
 
     return validated_tracking.summarize_excess([], pending=3)
+
+
+class _LedgerCursor:
+    def __init__(self):
+        self.statements = []
+        self.rowcount = 1
+
+    def execute(self, sql, params=None):
+        self.statements.append((sql, params))
+
+
+class _LedgerConn:
+    def __init__(self):
+        self.events = []
+
+    def commit(self):
+        self.events.append("commit")
+
+    def rollback(self):
+        self.events.append("rollback")
+
+
+def test_intraday_cursor_advance_survives_a_shadow_tracking_failure(monkeypatch):
+    """The cursor advance is committed before best-effort tracking, so a tracking
+    error can never roll it back (it would otherwise repeat on every run)."""
+    cursor, conn = _LedgerCursor(), _LedgerConn()
+
+    def boom(*args, **kwargs):
+        raise ValueError("bad candidate")
+
+    monkeypatch.setattr(market_signals.validated_tracking, "record_shadow_candidates", boom)
+    result = market_signals._record_suppressed_intraday(
+        cursor, conn, {"proposed_source_cursor_id": 123}, [{"entity_id": "2330"}]
+    )
+    assert result["suppressed"] == 1 and result["sent"] == 0
+    assert any("market_signal_state" in sql for sql, _ in cursor.statements)
+    assert conn.events == ["commit", "rollback"]  # advance committed first
+
+
+def test_intraday_candidates_are_recorded_after_the_cursor_commit(monkeypatch):
+    cursor, conn = _LedgerCursor(), _LedgerConn()
+    seen = {}
+    monkeypatch.setattr(
+        market_signals.validated_tracking, "record_shadow_candidates",
+        lambda cur, **kwargs: seen.update(kwargs) or len(kwargs["candidates"]),
+    )
+    rows = [{"entity_id": "2330"}, {"entity_id": "2317"}]
+    market_signals._record_suppressed_intraday(cursor, conn, {}, rows)
+    assert seen["candidates"] == rows
+    assert seen["rule"]["id"] == market_signals.validated_tracking.SHADOW_INTRADAY_RULE["id"]
+    assert conn.events == ["commit", "commit"]
+
+
+def test_shadow_settlement_failure_does_not_touch_the_live_tracking_transaction(monkeypatch):
+    conn = _LedgerConn()
+
+    def boom(*args, **kwargs):
+        raise ConnectionError("stock db down")
+
+    monkeypatch.setattr(market_signals.validated_tracking, "settle_pending_picks", boom)
+    market_signals._settle_shadow_picks(_LedgerCursor(), conn, object(), AS_OF)  # must not raise
+    assert conn.events == ["rollback"]

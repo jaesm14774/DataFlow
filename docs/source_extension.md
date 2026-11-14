@@ -1275,11 +1275,11 @@ attention-shock families remain historical-study only (no forward feed).
 - 依據：`docs/signal_validation_report_20261114.md`（stock 資料庫 2016–2026，逐日推論、樣本外、扣成本、BH 校正）。12 個常見訊號 × 3 種持有天數中，只有「突破 60 日高＋爆量，持有 10 個交易日」通過，且優勢很小。
 - 收盤後（`daily`）只發一則白話摘要：市場概況＋通過驗證的訊號（最多 5 檔）＋歷史統計與限制；沒有訊號就說「今日無通過驗證的訊號」；收盤價資料未到齊則明說「價格資料尚未更新」，不誤報成無訊號。
 - 規則登錄在 `dags/source_extension/validated_signals.json`；`status` 改成 `retired` 即停用。新增規則必須先用 `docs/signal_validation_research.py` 驗證。
-- 盤中 15 分鐘公告快訊預設關閉（`INTRADAY_PUSH_ENABLED=False`），候選與後續績效仍寫入帳本；要恢復舊行為把 `VALIDATED_DIGEST_MODE`、`INTRADAY_PUSH_ENABLED` 改回 `False/True`。
+- 盤中 15 分鐘公告快訊預設關閉（`INTRADAY_PUSH_ENABLED=False`），候選以「從未推播的影子名單」寫入 `validated_signal_picks`（`rule_id=intraday_announcement_shadow`），同樣持有 10 個交易日後結算，週五摘要會顯示被關掉的盤中公告到底有沒有跑贏大盤；原本的 `market_signal_outcomes` 只追蹤收盤掃描，不追蹤盤中。要恢復舊行為把 `VALIDATED_DIGEST_MODE`、`INTRADAY_PUSH_ENABLED` 改回 `False/True`。
 - Discord webhook 單次請求約 10,000 bytes 上限（超過回 HTTP 413），程式以 `DISCORD_REQUEST_BYTE_LIMIT` 拆批。
 - Discord 送不出去（413、網路）不再被誤報成「未能產出」，只寫入任務日誌並由 Airflow 重試補送；真正的掃描失敗通知現在以 run_key 去重，重試不會重複送。
 - 上線追蹤（每項改動都要有證據）：
   - 每天推出的名單（含沒列出的）都寫入 `validated_signal_picks`（含規則版本、排名、是否列出），持有 10 個交易日後結算，基準是「訊號日流動性達標的 4 位數股票，同一段時間的平均報酬」，與回測同口徑；`rule_id + as_of_date + entity_id` 唯一，重跑不會重複計算。
   - 每天摘要附「上線後成績（不是回測）」一行，與回測預期並列；已結算 60 檔以上且扣成本後為負時，會直接建議停用或重新驗證。
-  - 每週五摘要附「本週追蹤」：每週推播則數、送不出去則數、「未能產出」通知數（對照政策上線前 14 天的每週平均），加上上線成績。基準日為 `validated_signals.json` 的 `policy_started_on`。
+  - 每週五摘要附「本週追蹤」：每週推播則數、送不出去則數、「未能產出」通知數（對照政策上線前 14 天的每週平均），加上上線成績。基準日為 `validated_signals.json` 的 `policy_started_on`（2026-11-15：11/14 上午的舊版推播發生在改版之前，不算「改版後」）。
   - 追蹤寫入失敗會顯示在摘要裡，不會靜默。

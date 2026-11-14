@@ -81,10 +81,11 @@ def test_every_hit_is_recorded_with_rank_and_only_top_names_marked_shown():
         hits=hits, names={"1000": "甲"}, now=dt.datetime(2026, 11, 13, 20, 0),
     )
     assert inserted == 8
+    limit = RULE["params"]["max_names_shown"]
     shown = [params[8] for _, params in cursor.executed]
     ranks = [params[7] for _, params in cursor.executed]
     assert ranks == list(range(1, 9))
-    assert shown == [1, 1, 1, 1, 1, 0, 0, 0]
+    assert shown == [int(rank <= limit) for rank in ranks]
     assert all("INSERT IGNORE" in sql for sql, _ in cursor.executed)  # reruns cannot double count
 
 
@@ -132,3 +133,44 @@ def test_weekly_scorecard_compares_this_week_with_the_two_weeks_before_the_polic
     embed = validated_tracking.scorecard_embed(card, RULE)
     assert "30 則 → 本週 6 則" in embed["description"]
     assert "未能產出" in embed["description"]
+
+
+def test_suppressed_intraday_candidates_are_tracked_as_never_pushed_shadow_picks():
+    cursor = _Cursor()
+    rows = [
+        {"entity_id": "2330", "security_name": "台積電", "as_of_date": dt.date(2026, 11, 14),
+         "signal_keys": "insider_transfer_planned"},
+        {"entity_id": "2317", "security_name": None, "as_of_date": "2026-11-13 09:30:00",
+         "signal_keys": "company_announcement"},
+    ]
+    inserted = validated_tracking.record_shadow_candidates(
+        cursor, rule=validated_tracking.SHADOW_INTRADAY_RULE, version="validated_v1",
+        candidates=rows, now=dt.datetime(2026, 11, 14, 8, 0),
+    )
+    assert inserted == 2
+    for sql, params in cursor.executed:
+        assert "INSERT IGNORE" in sql and "0, %s, 'pending'" in sql  # shown=0: never pushed
+        assert params[0] == validated_tracking.SHADOW_INTRADAY_RULE["id"]
+    assert cursor.executed[1][1][2] == dt.date(2026, 11, 13)
+
+
+def test_weekend_announcement_is_settled_from_the_next_trading_session():
+    """An announcement dated on a Saturday enters at the next session's close, not never."""
+    frame, days = _panel()
+    friday_pos = next(i for i in range(50, 70) if days[i].weekday() == 4)
+    saturday = days[friday_pos].date() + dt.timedelta(days=1)
+    frame.loc[(frame["code"] == "2330") & (frame["date"] >= days[friday_pos + 11]), "close"] = 105.0
+    picks = [{"id": 9, "as_of_date": saturday, "entity_id": "2330"}]
+    [outcome] = validated_tracking.compute_pick_outcomes(
+        frame, picks, horizon=10, min_turnover_ntd=50_000_000
+    )
+    assert outcome["status"] == "settled"
+    assert outcome["entry_date"] == days[friday_pos + 1].date()
+    assert outcome["stock_return_pct"] == pytest.approx(5.0)
+
+
+def test_scorecard_shows_what_silencing_intraday_alerts_cost_or_saved():
+    pending = validated_tracking.shadow_line(validated_tracking.summarize_excess([], pending=40))
+    assert "40" in pending and "尚未結算" in pending
+    settled = validated_tracking.shadow_line(validated_tracking.summarize_excess([-1.0, -2.0, 0.5]))
+    assert "已結算 3 檔" in settled and "關掉沒有損失" in settled

@@ -8616,6 +8616,8 @@ def _build_validated_daily_digest(
                     rule=rule, registry=registry, as_of_date=as_of_date,
                     detection=detection, names=names,
                 )
+        if ledger_cursor is not None and ledger_connection is not None:
+            _settle_shadow_picks(ledger_cursor, ledger_connection, stock_cursor, as_of_date)
     finally:
         if stock_conn:
             stock_conn.close()
@@ -8625,6 +8627,69 @@ def _build_validated_daily_digest(
         as_of_date, registry, detection, names, tracking_embeds=tracking_embeds,
     )
     return message, embeds, str(detection.get("status")), str(registry.get("version"))
+
+
+def _record_suppressed_intraday(
+    cursor, connection, payload: dict[str, Any], candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Intraday alerts are off: advance the cursor first, then track as shadow picks.
+
+    Announcement alerts have no validated edge, so nothing is pushed. The cursor
+    advance is committed before the best-effort shadow tracking so a tracking error
+    can never roll it back (candidates are selected per run_key, so an un-advanced
+    cursor would repeat the same failure on every run).
+    """
+
+    proposed_cursor = payload.get("proposed_source_cursor_id")
+    if proposed_cursor is not None:
+        cursor.execute(
+            """
+            INSERT INTO market_signal_state (state_key, state_text, updated_at)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE state_text=VALUES(state_text), updated_at=VALUES(updated_at)
+            """,
+            (INTRADAY_CURSOR_KEY, str(int(proposed_cursor)), _now_taipei()),
+        )
+    connection.commit()
+    try:
+        validated_tracking.record_shadow_candidates(
+            cursor, rule=validated_tracking.SHADOW_INTRADAY_RULE,
+            version=str(validated_signals.load_registry().get("version")),
+            candidates=candidates, now=_now_taipei(),
+        )
+        connection.commit()
+    except Exception as exc:
+        print(f"[market signal] shadow tracking failed: {type(exc).__name__}: {exc}")
+        try:
+            connection.rollback()
+        except Exception:
+            pass
+    print(
+        "[market signal] intraday push disabled (unvalidated); "
+        f"recorded {len(candidates)} candidates without notifying"
+    )
+    return {
+        "sent": 0, "failed": 0, "mode": "intraday",
+        "candidates": len(candidates), "suppressed": len(candidates),
+    }
+
+
+def _settle_shadow_picks(ledger_cursor, ledger_connection, stock_cursor, as_of_date) -> None:
+    """Settle matured shadow picks in their own transaction, independent of the live rule."""
+
+    try:
+        validated_tracking.settle_pending_picks(
+            ledger_cursor, stock_cursor, rule=validated_tracking.SHADOW_INTRADAY_RULE,
+            today=as_of_date, now=_now_taipei(),
+            fetch_prices=validated_signals.fetch_price_history,
+        )
+        ledger_connection.commit()
+    except Exception as exc:
+        print(f"[market signal] shadow settlement failed: {type(exc).__name__}: {exc}")
+        try:
+            ledger_connection.rollback()
+        except Exception:
+            pass
 
 
 def _update_validated_tracking(
@@ -8955,27 +9020,7 @@ def notify_market_signal_snapshot() -> dict[str, Any]:
             }
 
         if mode == "intraday" and not INTRADAY_PUSH_ENABLED:
-            # Announcement alerts have no validated edge: keep the ledger rows
-            # (outcomes keep being tracked) and advance the cursor, but stay quiet.
-            proposed_cursor = payload.get("proposed_source_cursor_id")
-            if proposed_cursor is not None:
-                cursor.execute(
-                    """
-                    INSERT INTO market_signal_state (state_key, state_text, updated_at)
-                    VALUES (%s, %s, %s)
-                    ON DUPLICATE KEY UPDATE state_text=VALUES(state_text), updated_at=VALUES(updated_at)
-                    """,
-                    (INTRADAY_CURSOR_KEY, str(int(proposed_cursor)), _now_taipei()),
-                )
-            connection.commit()
-            print(
-                "[market signal] intraday push disabled (unvalidated); "
-                f"recorded {len(candidates)} candidates without notifying"
-            )
-            return {
-                "sent": 0, "failed": 0, "mode": "intraday",
-                "candidates": len(candidates), "suppressed": len(candidates),
-            }
+            return _record_suppressed_intraday(cursor, connection, payload, candidates)
 
         _refresh_intraday_company_names(cursor, candidates)
         batches: list[list[dict[str, Any]]] = []

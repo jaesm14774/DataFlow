@@ -1,0 +1,57 @@
+{
+  "observed_at": "2026-10-14T23:20:35.891716+00:00",
+  "persistent_writes": false,
+  "tables": "connection-local TEMPORARY clones of news and news_diff",
+  "sources": [
+    {
+      "source": "泛科學",
+      "urls": 10,
+      "validated": 10,
+      "temporary_stored": 10,
+      "categories": [
+        "來自 YT;專欄;科學儀器;科技能源",
+        "醫療健康"
+      ],
+      "max_article_id_chars": 6,
+      "max_body_chars": 5123
+    },
+    {
+      "source": "報導者",
+      "urls": 10,
+      "validated": 10,
+      "temporary_stored": 10,
+      "categories": [
+        "",
+        "Podcast",
+        "人權司法",
+        "政治社會",
+        "評論"
+      ],
+      "max_article_id_chars": 49,
+      "max_body_chars": 10115
+    },
+    {
+      "source": "環境資訊中心",
+      "urls": 48,
+      "validated": 48,
+      "temporary_stored": 48,
+      "categories": [
+        "副刊;攝影賞析",
+        "副刊;環境書摘",
+        "副刊;自然書寫",
+        "副刊;自然書訊",
+        "專欄;我們的島",
+        "專欄;我的氣候主場",
+        "專欄;減碳新生活",
+        "專欄;透視中國環境",
+        "時事新聞;台灣新聞",
+        "時事新聞;國際新聞",
+        "時事新聞;編輯直送",
+        "評論;公共論壇"
+      ],
+      "max_article_id_chars": 6,
+      "max_body_chars": 7114
+    }
+  ],
+  "all_matched": true
+}

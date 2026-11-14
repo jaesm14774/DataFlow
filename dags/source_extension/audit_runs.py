@@ -16,8 +16,8 @@ from source_extension.registry import (
     _load_stock_market_codes,
     _open_connection,
     priority_score,
+    source_allows_empty_result,
 )
-
 
 DAG_SCHEDULE_HINTS = {
     "source_extension_collect_process": "daily",
@@ -36,6 +36,12 @@ SOURCE_EVENT_TIME_MAX_AGE_DAYS = {
 SOURCE_EFFECTIVE_DATE_MAX_AGE_DAYS = {
     "twse_trading_status_daily": 7,
     "tpex_trading_status_daily": 7,
+    # Calendar-day grace covers non-session dates and source publication lag.
+    # This is audit-only; signal readers still require same-date observations.
+    "taifex_index_futures_positions_daily": 5,
+    "taifex_index_options_positions_daily": 5,
+    "taifex_futures_large_trader_positions_daily": 5,
+    "tpex_daytrade_market_summary_daily": 5,
     # TDCC's official distribution is weekly; allow holidays and publication lag.
     "tdcc_shareholder_distribution_weekly": 10,
     # These are daily sparse disclosures; allow weekends and short publication lag.
@@ -46,6 +52,23 @@ SOURCE_EFFECTIVE_DATE_MAX_AGE_DAYS = {
     "twse_director_shareholding_shortfall_daily": 60,
     "tpex_director_shareholding_shortfall_daily": 60,
 }
+
+
+def classify_effective_date_freshness(
+    *, effective_date: dt.date | None, run_date: dt.date | None,
+    max_age_days: int | None,
+) -> tuple[int | None, str | None]:
+    """Return an effective-date age and report-only quality flag."""
+    if effective_date is None or run_date is None or max_age_days is None:
+        return None, None
+    age_days = (run_date - effective_date).days
+    if age_days < 0:
+        return age_days, "latest_effective_date_in_future"
+    if age_days > max_age_days:
+        return age_days, "latest_effective_date_older_than_expected"
+    return age_days, None
+
+
 AFTER_CLOSE_MARKET_INDEX_SOURCE_KEYS = (
     "twse_market_index_daily",
     "tpex_market_index_daily",
@@ -497,7 +520,11 @@ def audit_source_run(
             )
             if accounted_rows != item["row_count"]:
                 item["quality_flags"].append("row_accounting_mismatch")
-            if item["status"] == "success" and item["row_count"] == 0:
+            if (
+                item["status"] == "success"
+                and item["row_count"] == 0
+                and not source_allows_empty_result(source_key)
+            ):
                 item["quality_flags"].append("empty_response_requires_source_semantics")
             if (
                 item["status"] == "success"
@@ -590,16 +617,14 @@ def audit_source_run(
                             if isinstance(effective_max, dt.datetime)
                             else effective_max
                         )
-                        item["effective_date_age_days"] = (run_date - effective_date).days
-                        if item["effective_date_age_days"] < 0:
-                            item["quality_flags"].append("latest_effective_date_in_future")
-                        elif (
-                            item["effective_date_age_days"]
-                            > item["effective_date_max_age_days"]
-                        ):
-                            item["quality_flags"].append(
-                                "latest_effective_date_older_than_expected"
-                            )
+                        age_days, quality_flag = classify_effective_date_freshness(
+                            effective_date=effective_date,
+                            run_date=run_date,
+                            max_age_days=item["effective_date_max_age_days"],
+                        )
+                        item["effective_date_age_days"] = age_days
+                        if quality_flag:
+                            item["quality_flags"].append(quality_flag)
 
                 if item["event_time_max_age_days"] is not None and item["accepted_count"] > 0:
                     if latest_event_time is None:

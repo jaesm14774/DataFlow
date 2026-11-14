@@ -28,14 +28,13 @@ def test_material_event_requires_important_keyword():
     assert evaluate_record(ordinary, rule) is None
 
 
-def test_revenue_rule_detects_threshold_and_turn_negative():
+def test_revenue_growth_alone_never_triggers_an_alert():
+    """Reported revenue growth has no validated surprise definition, so it must not push."""
     rule = _rule("held_revenue_warning")
-    severe_drop = {"metric_value": -25.0}
-    turn_negative = {"metric_value": -3.0}
-    healthy = {"metric_value": 12.0}
-    assert "<= -20.00%" in evaluate_record(severe_drop, rule)
-    assert "轉為" in evaluate_record(turn_negative, rule, previous_revenue_yoy=8.0)
-    assert evaluate_record(healthy, rule, previous_revenue_yoy=10.0) is None
+    for record, previous in (({"metric_value": -25.0}, None),
+                             ({"metric_value": -3.0}, 8.0),
+                             ({"metric_value": 12.0}, 10.0)):
+        assert evaluate_record(record, rule, previous_revenue_yoy=previous) is None
 
 
 def test_dividend_rule_notifies_new_record():

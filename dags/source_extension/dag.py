@@ -41,7 +41,9 @@ def _build_collection_dag(
         catchup=False,
         is_paused_upon_creation=False,
         max_active_runs=1,
-        max_active_tasks=4,
+        # The shared pool below caps concurrent writers across collection DAGs;
+        # this DAG-level limit also bounds its other task instances.
+        max_active_tasks=2,
         default_args={
             "owner": "jaesm14774",
             "retries": 1,
@@ -62,7 +64,7 @@ def _build_collection_dag(
         def discover_task():
             return discover_approved_source_keys(schedule_hint=schedule_hint)
 
-        @task(task_id="ingest_approved_source")
+        @task(task_id="ingest_approved_source", pool="source_records_write")
         def ingest_task(source_key):
             return ingest_source(source_key)
 
@@ -352,6 +354,8 @@ def _build_collection_dag(
                 trigger_dag_id="portfolio_data_notify",
                 trigger_run_id="portfolio_notify__{{ dag_run.run_id }}",
                 logical_date="{{ data_interval_end }}",
+                # One flaky unrelated source must not block holdings alerts.
+                trigger_rule=TriggerRule.ALL_DONE,
                 skip_when_already_exists=True,
                 wait_for_completion=False,
             )

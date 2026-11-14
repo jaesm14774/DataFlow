@@ -8,9 +8,11 @@ DataFlow is designed to streamline the collection and processing of financial da
 
 - Stock market data collection and analysis
 - Chinese news article crawling from multiple sources
+- PTT board and YouTube channel collection
 - Notification delivery through Discord and Line
-- Google Trends data collection
 - Google Play game pre-registration and new releases collection (支援 Google Play、QooApp 多來源，自動去重)
+- Rights-authorized Bahamut game guide collection
+- Money101 credit-card data collection
 - Approved official-source ingestion, market-signal analysis, and holdings-based notifications
 
 ## Technical Highlights
@@ -43,7 +45,8 @@ DataFlow is designed to streamline the collection and processing of financial da
 ├── dags/                   # Airflow DAG definitions
 │   ├── common/             # Common utilities and configurations
 │   ├── credit_cards/       # Credit card data collection
-│   ├── game/               # Game-related data collection (pre-registration & new releases)
+│   ├── game/               # Game releases, pre-registration, and guide ingestion
+│   │   └── database/       # Game knowledge schema and read views
 │   ├── lib/                # Core library functions
 │   ├── news_ch/            # Chinese news collection
 │   │   ├── utils.py        # Pure helpers (URL validation, text/time cleanup)
@@ -117,7 +120,7 @@ BACKFILL_DATE = '2026-03-16'
 1. 設定 `BACKFILL_DATE` 為目標日期（格式 `YYYY-MM-DD`）
 2. 在 Airflow UI 手動觸發股票收集 DAG
 3. 等待 DAG 完成後，修改為下一個日期，再次觸發
-4. 全部回補完成後，將 `BACKFILL_DATE` 改回 `None` 恢復正常排程
+4. 全部回補完成後，將 `BACKFILL_DATE` 改回空字串 `''` 恢復正常排程
 
 **影響範圍：**
 - `StockCollectLogic.now_time`：三大法人、個股成交等收集 API 的日期參數
@@ -127,7 +130,7 @@ BACKFILL_DATE = '2026-03-16'
 **注意事項：**
 - 回補日若為假日，`is_taiwan_stock_close` 會跳過該日
 - 依賴 `really_date`（從 DB 查最新三大法人日期）的任務，會在三大法人資料寫入後自動取得正確日期
-- 回補完畢務必改回 `BACKFILL_DATE = None`
+- 回補完畢務必改回 `BACKFILL_DATE = ''`
 
 ## News crawler layout
 

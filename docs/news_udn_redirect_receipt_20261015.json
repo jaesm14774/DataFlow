@@ -1,0 +1,17 @@
+{
+  "requested_url": "https://udn.com/news/story/12806/9814351",
+  "resolved_url": "https://udn.com/news/story/6839/9813826",
+  "article_id": "6839/9813826",
+  "title": "聯電、南亞科、台光電…台股衝關5萬點 哪些AI股拉回安心買？13檔名家口袋名單公開",
+  "created_at": "2026-10-14 14:58:27",
+  "body_chars": 2103,
+  "has_first_section": true,
+  "has_last_section": true,
+  "validation_error": null,
+  "browser_full_body_match": {
+    "normalization": "NFKC and whitespace removal",
+    "normalized_chars": 2077,
+    "fnv32": "ae9ece7d",
+    "matched": true
+  }
+}

@@ -11,6 +11,8 @@ from typing import Any
 
 from pymysql.cursors import SSCursor
 
+from source_extension import research_signals as rs
+
 
 def _float(value: Any) -> float | None:
     try:
@@ -170,6 +172,77 @@ def _finish_group(key: dict[str, Any], group: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _as_date(value: Any) -> dt.date:
+    """Signal-date keys are dt.date from MySQL but ISO strings elsewhere."""
+
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    return dt.date.fromisoformat(str(value)[:10])
+
+
+RESEARCH_MIN_UNIVERSE = 200
+RESEARCH_MIN_INDEPENDENT_DATES = 20
+
+
+def _research_summary(groups: dict[tuple[Any, ...], dict[str, Any]]) -> list[dict[str, Any]]:
+    """Date-block significance for research families, BH-adjusted together.
+
+    Only the primary ``next_close`` basis is tested. Per-date means are
+    sub-sampled every ``horizon`` sessions' worth of dates so overlapping
+    holding windows are not treated as independent evidence.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for key, group in groups.items():
+        policy_version, origin, market, source_status, price_source, basis, horizon, family = key
+        if basis != "next_close":
+            continue
+        by_date = sorted(group["by_date_excess"].items())
+        date_means = [total / count for _, (total, count) in by_date if count]
+        # keep dates at least ~horizon sessions apart (calendar approximation) so
+        # overlapping holding windows are not counted as independent evidence
+        min_gap = dt.timedelta(days=math.ceil(max(1, int(horizon)) * 7 / 5))
+        independent = []
+        last_kept = None
+        for day, (total, count) in by_date:
+            if not count:
+                continue
+            day_value = _as_date(day)
+            if last_kept is None or day_value - last_kept >= min_gap:
+                independent.append(total / count)
+                last_kept = day_value
+        stats = rs.mean_t_stat(independent)
+        rows.append({
+            "policy_version": policy_version, "execution_origin": origin, "market": market,
+            "source_status": source_status, "price_source": price_source,
+            "outcome_basis": basis, "horizon_sessions": horizon, "family": family,
+            "signal_dates": len(date_means), "independent_dates": len(independent),
+            "mean_date_directional_excess_pp": (
+                None if stats["mean"] is None else round(stats["mean"], 6)
+            ),
+            "t_stat": None if stats["t"] is None else round(stats["t"], 3),
+            "p_value": stats["p"],
+        })
+    testable = [
+        row["p_value"] if row["independent_dates"] >= RESEARCH_MIN_INDEPENDENT_DATES else None
+        for row in rows
+    ]
+    q_values = rs.benjamini_hochberg(testable)
+    for row, q_value in zip(rows, q_values):
+        row["q_bh"] = None if q_value is None else round(q_value, 4)
+        mean, dates = row["mean_date_directional_excess_pp"], row["independent_dates"]
+        if dates < RESEARCH_MIN_INDEPENDENT_DATES or mean is None:
+            row["status"] = "insufficient_dates"
+        elif q_value is not None and q_value < 0.05:
+            row["status"] = "candidate_positive" if mean > 0 else "candidate_reversed"
+        else:
+            row["status"] = "noise_or_unproven"
+        row["p_value"] = None if row["p_value"] is None else round(row["p_value"], 6)
+    return sorted(rows, key=lambda r: (r["family"], r["market"], r["horizon_sessions"]))
+
+
 def _iter_dict_rows(cursor, query: str, params: tuple[Any, ...], *, batch_size: int = 2_000):
     """Stream query rows so the 120-day evidence ledger stays memory-bounded."""
 
@@ -298,6 +371,7 @@ def summarize_daily_backtest(
     observed_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     notification_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     family_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    research_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     family_readiness: dict[tuple[Any, ...], dict[str, Any]] = {}
     pending_total = 0
     settled_total = 0
@@ -337,9 +411,16 @@ def summarize_daily_backtest(
             family_status = details.get("family_status")
             if not isinstance(family_status, dict):
                 family_status = {}
+            raw_research = details.get("research_family_directions")
+            research_directions = {
+                str(name): direction
+                for name, value in (raw_research.items() if isinstance(raw_research, dict) else ())
+                if (direction := _direction(value))
+            }
             metadata = {
                 "policy_version": str(details.get("policy_version") or "legacy_unknown"),
                 "family_directions": family_directions,
+                "research_family_directions": research_directions,
                 "family_status": family_status,
                 "notification_status": str(
                     candidate_row.get("notification_status")
@@ -353,6 +434,8 @@ def summarize_daily_backtest(
             metadata_by_candidate[candidate_id] = metadata
 
         seen_identities.clear()
+        universe_totals: dict[tuple[Any, ...], list[float]] = {}
+        date_research_rows: list[tuple[tuple[Any, ...], tuple[Any, ...], dict[str, Any]]] = []
         for row in _iter_dict_rows(cursor, outcomes_query, (signal_date,)):
             candidate_id = int(row.get("candidate_id") or 0)
             metadata = metadata_by_candidate.get(candidate_id)
@@ -382,6 +465,7 @@ def summarize_daily_backtest(
                 complete_dates.add(signal_date_key)
             row.update(
                 family_directions=metadata["family_directions"],
+                research_family_directions=metadata["research_family_directions"],
                 family_status=metadata["family_status"],
                 policy_version=metadata["policy_version"],
                 execution_origin=execution_origin,
@@ -440,6 +524,19 @@ def summarize_daily_backtest(
                     group = family_groups.setdefault(key, _new_group())
                     _add_row(group, row, direction=family_direction)
 
+                # Research-only families never vote and stay out of
+                # family_counterfactuals. They are collected per date and scored
+                # below against the same-date evaluated-universe mean (the index
+                # is cap-weighted and dominated by one stock).
+                universe_key = (common[0], common[1], common[5], common[6])
+                stock_return = _float(row.get("stock_return_pct"))
+                if row.get("status") == "settled" and stock_return is not None:
+                    totals = universe_totals.setdefault(universe_key, [0.0, 0])
+                    totals[0] += stock_return
+                    totals[1] += 1
+                if row["research_family_directions"]:
+                    date_research_rows.append((common, universe_key, row))
+
                 for family, state in row["family_status"].items():
                     if state != "neutral":
                         continue
@@ -469,6 +566,19 @@ def summarize_daily_backtest(
                             date_values[1] += 1
                     if row.get("status") == "pending_data":
                         neutral["pending_reasons"][str(row.get("error_reason") or "unspecified")] += 1
+
+        for common, universe_key, row in date_research_rows:
+            total, count = universe_totals.get(universe_key, [0.0, 0])
+            stock_return = _float(row.get("stock_return_pct"))
+            relative = dict(row)
+            relative["excess_return_pp"] = (
+                stock_return - total / count
+                if stock_return is not None and count >= RESEARCH_MIN_UNIVERSE else None
+            )
+            for family, family_direction in row["research_family_directions"].items():
+                group = research_groups.setdefault(common[:7] + (family,), _new_group())
+                _add_row(group, relative, direction=family_direction)
+        date_research_rows.clear()
 
     def export(groups: dict[tuple[Any, ...], dict[str, Any]], labels: tuple[str, ...]):
         results = []
@@ -513,7 +623,13 @@ def summarize_daily_backtest(
         "family_counterfactuals": export(
             family_groups, common_labels + ("family",),
         ),
+        "research_universe_relative": export(
+            research_groups, common_labels + ("family",),
+        ),
+        "research_family_summary": _research_summary(research_groups),
         "interpretation": {
+            "research_families": "non-voting shadow families; mean_directional_excess_pp in research_universe_relative is versus the same-date evaluated-universe mean, not the index",
+            "research_family_summary": "date-block t-stat of per-date directional excess, Benjamini-Hochberg across families x horizons; status needs >=20 independent dates and never changes policy by itself",
             "primary_basis": "next_close; after-close signal entry proxy at the next session close",
             "signal_close": "descriptive only; it assumes entry at the signal-day close",
             "directional_price_hit_rate": "share where signal direction times raw stock return is positive",

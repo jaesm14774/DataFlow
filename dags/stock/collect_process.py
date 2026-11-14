@@ -136,11 +136,3 @@ def month_revenue_collect():
         main_etl.process()
     
     print('[stock DAG] 月營收收集結束')
-
-#暫停函數
-def time_sleep():
-    if START:
-        while datetime.datetime.now().hour+8 <=19:
-            time.sleep(600)
-    
-    print('[stock DAG] 盤後等待結束')

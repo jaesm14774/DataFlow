@@ -9,6 +9,11 @@ from airflow.operators.python import PythonOperator
 
 DB_NAME='holiday'
 
+# 證交所公告的臨時休市日（政府辦公日曆沒有），新增時需註明依據
+MARKET_ONLY_CLOSURES=[
+    ('2026-10-23','颱風休市','薔琵颱風，證交所/櫃買中心公告休市；官方指數、個股行情與融資券當日皆無資料'),
+]
+
 #Discord notify
 token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
 token=token.loc['程式bug權杖','token']
@@ -65,9 +70,20 @@ def collect_holiday_taiwan():
     
     cursor.execute('truncate table taiwan')
     conn.commit()
-    
+
     result.to_sql('taiwan',engine,index=0,if_exists='append')
-    
+
+    # 政府辦公日曆不含「颱風休市」這類臨時休市；重載後要補回，否則會被清掉
+    for closure_date, closure_name, closure_note in MARKET_ONLY_CLOSURES:
+        cursor.execute(
+            'INSERT INTO taiwan (now_date, chinese_name, isholiday, holidayCategory, description) '
+            'VALUES (%s, %s, %s, %s, %s) '
+            'ON DUPLICATE KEY UPDATE chinese_name=VALUES(chinese_name), isholiday=VALUES(isholiday), '
+            'holidayCategory=VALUES(holidayCategory), description=VALUES(description)',
+            (closure_date, closure_name, '是', '市場臨時休市', closure_note),
+        )
+    conn.commit()
+
     conn.close()
     engine.dispose()
 

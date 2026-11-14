@@ -1,6 +1,9 @@
+from datetime import time as datetime_time
+
 from airflow import DAG
 from airflow.operators.python import PythonOperator,BranchPythonOperator
 from airflow.operators.dummy_operator import DummyOperator
+from airflow.sensors.time_sensor import TimeSensor
 from airflow.utils.edgemodifier import Label
 
 from stock.collect_process import *
@@ -116,9 +119,13 @@ with DAG(
         on_failure_callback=notify.task_custom_failure_function
     )
 
-    sleep_process = PythonOperator(
+    sleep_process = TimeSensor(
         task_id='time_sleep_function',
-        python_callable=time_sleep,
+        # Airflow's configured timezone is UTC; 12:00 UTC is 20:00 in Taipei.
+        # Match the old 10-minute wall-clock check without occupying a worker.
+        target_time=datetime_time(11, 59, 59, 999999),
+        mode='reschedule',
+        poke_interval=600,
         dag=dag,
         on_failure_callback=notify.task_custom_failure_function
     )    

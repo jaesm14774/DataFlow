@@ -1270,16 +1270,19 @@ with the trailing 5-day return, so diagnostics can separate momentum restatement
 If the news database is unreachable the scan continues without it. The news and PTT
 attention-shock families remain historical-study only (no forward feed).
 
-## 推播政策：只推通過驗證的訊號（2026-11-14）
+## 推播政策：只推長期證據站得住腳的規則（動態驗證，2026-11-14）
 
-- 依據：`docs/signal_validation_report_20261114.md`（stock 資料庫 2016–2026，逐日推論、樣本外、扣成本、BH 校正）。12 個常見訊號 × 3 種持有天數中，只有「突破 60 日高＋爆量，持有 10 個交易日」通過，且優勢很小。
-- 收盤後（`daily`）只發一則白話摘要：市場概況＋通過驗證的訊號（最多 5 檔）＋歷史統計與限制；沒有訊號就說「今日無通過驗證的訊號」；收盤價資料未到齊則明說「價格資料尚未更新」，不誤報成無訊號。
-- 規則登錄在 `dags/source_extension/validated_signals.json`；`status` 改成 `retired` 即停用。新增規則必須先用 `docs/signal_validation_research.py` 驗證。
+- 依據：`docs/signal_validation_report_20261114.md`（stock 資料庫 2016–2026，逐日推論、樣本外、扣成本、BH 校正）。這是一份**快照**，不是最終判決：預先登錄的 12 條規則（`rules_v1`）**全部**每週用全部歷史重新驗證，短期結果只是參考。
+- 單一定義來源：`dags/source_extension/signal_rules.py` 定義 12 條規則與資料公布時間（融資延後 1 個交易日、千張大戶延後 3 個交易日），研究回測（`docs/signal_validation_research.py`）、每日偵測（`rule_detection.py`）、每週重驗證共用同一份。
+- 狀態與遲滯（`rule_lifecycle.py`）：`candidate` 觀察中／`active` 推播中／`suspended` 暫停（持續追蹤）。升級要通過完整門檻且在目前狀態滿 90 天；降級要長期（全部樣本外）扣成本後超額為負，且滿 90 天、至少 60 個新訊號日。最近一季只做參考，不參與決定。對照組規則（外資賣超、大戶減持）永遠不推播。
+- 每週六 09:00（`market_signal_revalidate_weekly` DAG）：把已成熟的訊號日追加到 `validated_rule_daily`（第一次執行才會回補全部歷史，之後只讀最近區間），重新計算所有規則並更新 `validated_rule_status`，每次變更寫一列 `validated_rule_history`（原因＋證據快照）。摘要讀狀態時以資料庫為準，連不上就退回 `validated_signals.json` 的種子狀態。
+- 收盤後（`daily`）只發一則白話摘要：市場概況＋推播中規則的訊號（每條規則最多 5 檔）＋「目前長期證據（截至日期）」與短期參考；沒有訊號就說「今日沒有符合推播中規則的股票」；價格或某條規則所需的資料（法人、融資、大戶）未到齊，明說資料未到，不誤報成無訊號。規則狀態變更會在下一個交易日的摘要公告一次。
+- 規則集內容或門檻要改，必須登錄新版本（新的登錄日、證據從登錄日往後累積），不可原地改門檻。
 - 盤中 15 分鐘公告快訊預設關閉（`INTRADAY_PUSH_ENABLED=False`），候選以「從未推播的影子名單」寫入 `validated_signal_picks`（`rule_id=intraday_announcement_shadow`），同樣持有 10 個交易日後結算，週五摘要會顯示被關掉的盤中公告到底有沒有跑贏大盤；原本的 `market_signal_outcomes` 只追蹤收盤掃描，不追蹤盤中。要恢復舊行為把 `VALIDATED_DIGEST_MODE`、`INTRADAY_PUSH_ENABLED` 改回 `False/True`。
-- Discord webhook 單次請求約 10,000 bytes 上限（超過回 HTTP 413），程式以 `DISCORD_REQUEST_BYTE_LIMIT` 拆批。
+- Discord webhook 單次請求約 10,000 bytes 上限（超過回 HTTP 413），程式以 `DISCORD_REQUEST_BYTE_LIMIT` 拆批；摘要本身另有 8,800 bytes 預算，規則多時自動縮減每條規則列出的檔數。
 - Discord 送不出去（413、網路）不再被誤報成「未能產出」，只寫入任務日誌並由 Airflow 重試補送；真正的掃描失敗通知現在以 run_key 去重，重試不會重複送。
 - 上線追蹤（每項改動都要有證據）：
-  - 每天推出的名單（含沒列出的）都寫入 `validated_signal_picks`（含規則版本、排名、是否列出），持有 10 個交易日後結算，基準是「訊號日流動性達標的 4 位數股票，同一段時間的平均報酬」，與回測同口徑；`rule_id + as_of_date + entity_id` 唯一，重跑不會重複計算。
-  - 每天摘要附「上線後成績（不是回測）」一行，與回測預期並列；已結算 60 檔以上且扣成本後為負時，會直接建議停用或重新驗證。
-  - 每週五摘要附「本週追蹤」：每週推播則數、送不出去則數、「未能產出」通知數（對照政策上線前 14 天的每週平均），加上上線成績。基準日為 `validated_signals.json` 的 `policy_started_on`（2026-11-15：11/14 上午的舊版推播發生在改版之前，不算「改版後」）。
+  - **所有規則**每天的命中都寫入 `validated_signal_picks`：推播中規則記錄全部命中（列出前幾檔），觀察中／暫停規則只記錄最強的 30 檔且 `shown=0`（絕不推播），持有期滿後結算，基準是「訊號日流動性達標的 4 位數股票，同一段時間的平均報酬」，與回測同口徑；`rule_id + as_of_date + entity_id` 唯一，重跑不會重複計算。所需資料還沒到齊的規則當天不記錄。
+  - 上線成績**以訊號日為單位**（每天取當天命中的平均超額報酬，一天一個觀察值）並以 Newey-West 算 t 值；重疊持有期不當作獨立樣本。標示為「短期參考」，**不會建議停用**——規則去留只由每週的長期驗證決定。
+  - 每週五摘要附「本週追蹤」：每週推播則數、送不出去則數、「未能產出」通知數（對照政策上線前 14 天的每週平均）、各規則的長期證據與狀態、推播中規則的上線成績。基準日為 `validated_signals.json` 的 `policy_started_on`（2026-11-15：11/14 上午的舊版推播發生在改版之前，不算「改版後」）。
   - 追蹤寫入失敗會顯示在摘要裡，不會靜默。

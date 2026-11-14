@@ -3,9 +3,14 @@ import datetime as dt
 import pandas as pd
 import pytest
 
-from source_extension import validated_signals, validated_tracking
+from source_extension import validated_tracking
 
-RULE = next(iter(validated_signals.active_rules(validated_signals.load_registry())))
+RULE = {
+    "id": "breakout_60d_volume", "label": "突破 60 日高＋爆量", "status": "active", "horizon_sessions": 10,
+    "params": {"max_names_shown": 5, "min_turnover_ntd": 50_000_000},
+    "evidence": {"horizon": 10, "oos_dates": 886, "mean_excess_after_cost_pct": 0.17, "t_nw": 3.0,
+                 "years_total": 11, "years_positive": 9},
+}
 
 
 def _panel(sessions=80):
@@ -75,7 +80,7 @@ class _Cursor:
 
 def test_every_hit_is_recorded_with_rank_and_only_top_names_marked_shown():
     cursor = _Cursor()
-    hits = [{"code": str(1000 + i), "close": 50.0, "volume_ratio": 5.0 - i * 0.1} for i in range(8)]
+    hits = [{"code": str(1000 + i), "close": 50.0, "metric": 5.0 - i * 0.1} for i in range(8)]
     inserted = validated_tracking.record_picks(
         cursor, rule=RULE, version="validated_v1", as_of_date=dt.date(2026, 11, 13),
         hits=hits, names={"1000": "甲"}, now=dt.datetime(2026, 11, 13, 20, 0),
@@ -89,16 +94,69 @@ def test_every_hit_is_recorded_with_rank_and_only_top_names_marked_shown():
     assert all("INSERT IGNORE" in sql for sql, _ in cursor.executed)  # reruns cannot double count
 
 
-def test_tracking_line_says_no_conclusion_before_any_pick_settles():
-    line = validated_tracking.tracking_line(validated_tracking.summarize_excess([], pending=12), RULE)
-    assert "12" in line and "不能下結論" in line
+def test_tracking_line_says_there_is_no_result_before_any_pick_settles():
+    line = validated_tracking.tracking_line(validated_tracking.summarize_by_date([], 10, pending=12), RULE)
+    assert "12" in line and "還沒有實際成績" in line
 
 
-def test_tracking_line_flags_underperformance_only_with_enough_samples():
-    few = validated_tracking.tracking_line(validated_tracking.summarize_excess([-3.0] * 10), RULE)
-    assert "樣本還少" in few and "建議停用" not in few
-    many = validated_tracking.tracking_line(validated_tracking.summarize_excess([-3.0] * 80), RULE)
-    assert "建議停用" in many
+def _days(count, mean, per_day=3, start=dt.date(2026, 1, 5)):
+    return [(start + dt.timedelta(days=i), mean, per_day) for i in range(count)]
+
+
+def test_a_short_bad_live_record_never_recommends_stopping_a_rule():
+    summary = validated_tracking.summarize_by_date(_days(8, -3.0, per_day=10), 10)
+    line = validated_tracking.tracking_line(summary, RULE)
+    assert summary["dates"] == 8 and summary["settled"] == 80
+    assert "停用" not in line and "建議" not in line
+    assert "-3.00%" in line  # the number is shown honestly, just never turned into a verdict
+    assert "由每週的長期驗證決定" in validated_tracking.LIVE_REFERENCE_NOTE
+
+
+def test_live_evidence_counts_signal_dates_not_picks():
+    """One busy day with 50 winners must not outweigh a quiet losing day."""
+    day = dt.date(2026, 3, 2)
+    summary = validated_tracking.summarize_by_date(
+        [(day, 10.0, 50), (day + dt.timedelta(days=30), -10.0, 1)], 10
+    )
+    assert summary["mean_excess_pct"] == pytest.approx(0.0)
+    assert summary["settled"] == 51 and summary["dates"] == 2
+
+
+def test_overlapping_holding_periods_are_not_counted_as_independent_observations():
+    consecutive = validated_tracking.summarize_by_date(_days(20, 0.5), 10)
+    assert consecutive["dates"] == 20
+    assert consecutive["independent_dates"] < 5
+    spaced = validated_tracking.summarize_by_date(
+        [(dt.date(2026, 1, 5) + dt.timedelta(days=20 * i), 0.5, 3) for i in range(8)], 10
+    )
+    assert spaced["independent_dates"] == 8
+
+
+def test_live_t_statistic_needs_enough_dates_and_the_recent_window_is_separate():
+    few = validated_tracking.summarize_by_date(_days(5, 1.0), 10)
+    assert few["t_nw"] is None
+    long_run = _days(100, 0.2)
+    summary = validated_tracking.summarize_by_date(long_run[:-63] + [(d, -2.0, n) for d, _, n in long_run[-63:]], 10)
+    assert summary["t_nw"] is not None
+    assert summary["recent_mean_excess_pct"] == pytest.approx(-2.0)
+    assert summary["mean_excess_pct"] != summary["recent_mean_excess_pct"]
+
+
+def test_candidates_record_only_their_strongest_hits_and_never_mark_any_as_shown():
+    cursor = _Cursor()
+    hits = [{"code": str(1000 + i), "close": 50.0, "metric": 1.0} for i in range(200)]
+    rule = validated_tracking.tracking_rule({**RULE, "status": "candidate"})
+    inserted = validated_tracking.record_picks(
+        cursor, rule=rule, version="rules_v1", as_of_date=dt.date(2026, 11, 13),
+        hits=hits, names={}, now=dt.datetime(2026, 11, 13, 20, 0),
+    )
+    assert inserted == validated_tracking.SHADOW_PICKS_PER_DAY
+    assert all(params[8] == 0 for _, params in cursor.executed)
+
+
+def test_only_an_active_rule_gets_a_shown_limit():
+    assert validated_tracking.tracking_rule(RULE)["params"]["max_names_shown"] == 5
+    assert validated_tracking.tracking_rule({**RULE, "status": "suspended"})["params"]["max_names_shown"] == 0
 
 
 def test_summary_deducts_cost_and_counts_names_that_beat_it():
@@ -125,14 +183,16 @@ def test_weekly_scorecard_compares_this_week_with_the_two_weeks_before_the_polic
             return []
 
     card = validated_tracking.weekly_scorecard(
-        Cursor(), today=dt.date(2026, 11, 20), policy_start=dt.date(2026, 11, 14), rule=RULE
+        Cursor(), today=dt.date(2026, 11, 20), policy_start=dt.date(2026, 11, 14), rules=[RULE]
     )
     assert card["before_per_week"]["messages"] == 30
     assert card["before_per_week"]["failed"] == 2
     assert card["after_week"]["messages"] == 6
-    embed = validated_tracking.scorecard_embed(card, RULE)
+    embed = validated_tracking.scorecard_embed(card, [RULE, {**RULE, "id": "x", "label": "觀察規則", "status": "candidate"}])
     assert "30 則 → 本週 6 則" in embed["description"]
     assert "未能產出" in embed["description"]
+    assert "長期扣成本 +0.17%" in embed["description"]  # the long-term record is part of the scorecard
+    assert "觀察中" in embed["description"] and "觀察規則" in embed["description"]
 
 
 def test_suppressed_intraday_candidates_are_tracked_as_never_pushed_shadow_picks():
@@ -174,3 +234,28 @@ def test_scorecard_shows_what_silencing_intraday_alerts_cost_or_saved():
     assert "40" in pending and "尚未結算" in pending
     settled = validated_tracking.shadow_line(validated_tracking.summarize_excess([-1.0, -2.0, 0.5]))
     assert "已結算 3 檔" in settled and "關掉沒有損失" in settled
+
+
+def test_each_pick_settles_with_the_holding_period_it_was_recorded_under():
+    """A candidate recorded at 5 sessions keeps that horizon even after the rule moves to 10."""
+    frame, days = _panel()
+    signal_day = days[50].date()
+    updates = []
+
+    class Ledger(_Cursor):
+        def execute(self, sql, params=None):
+            super().execute(sql, params)
+            if sql.strip().startswith("UPDATE"):
+                updates.append(params)
+
+        def fetchall(self):
+            return [(1, signal_day, "2330", 5), (2, signal_day, "2330", 10)]
+
+    rule = {**RULE, "horizon_sessions": 10}
+    counts = validated_tracking.settle_pending_picks(
+        Ledger(), object(), rule=rule, today=days[-1].date(), now=dt.datetime(2026, 11, 14),
+        fetch_prices=lambda cursor, today, span: frame,
+    )
+    assert counts["settled"] == 2
+    exit_dates = {params[-1]: params[2] for params in updates}  # id -> exit_date
+    assert exit_dates[1] == days[50 + 1 + 5].date() and exit_dates[2] == days[50 + 1 + 10].date()

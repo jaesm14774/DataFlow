@@ -24,7 +24,9 @@ from lib.taiwan_market_calendar import is_taiwan_stock_market_closed
 from source_extension.adapters import parse_number
 from source_extension.backtest_diagnostics import summarize_daily_backtest
 from source_extension.equity_order_flow import load_equity_order_flow
-from source_extension import research_signals, validated_signals, validated_tracking
+from source_extension import (
+    research_signals, rule_detection, rule_revalidation, validated_signals, validated_tracking,
+)
 from source_extension.outcome_lifecycle import (
     FOLLOWUP_HORIZONS,
     directional_excursion_pct,
@@ -8585,11 +8587,13 @@ def _send_capture_failure_notice(payload: dict[str, Any], notifier: DiscordNotif
 def _build_validated_daily_digest(
     as_of_date: dt.date | None, ledger_cursor=None, ledger_connection=None,
 ) -> tuple[str, list[dict[str, Any]], str, str]:
-    """Plain-language digest limited to rules that passed validation.
+    """Plain-language digest of the rules that currently have long-term evidence.
 
-    With a ledger connection it also records every hit, settles matured picks and
-    appends the live tracking line (plus the weekly scorecard on Fridays), so the
-    backtest promise is always shown next to what actually happened.
+    Rule statuses come from the weekly revalidation (database first, JSON seed as the
+    fallback). With a ledger connection it also records every rule's hits (candidates as
+    never-shown shadow picks), settles matured picks and appends the live tracking lines
+    (plus the weekly scorecard on Fridays), so the backtest promise is always shown next
+    to what actually happened.
     """
 
     registry = validated_signals.load_registry()
@@ -8599,32 +8603,32 @@ def _build_validated_daily_digest(
     tracking_embeds: list[dict[str, Any]] = []
     try:
         stock_conn, stock_cursor, stock_engine = _open_stock_connection()
-        rules = validated_signals.active_rules(registry)
-        rule = next(
-            (item for item in rules if item["id"] == validated_signals.BREAKOUT_RULE_ID), None
-        )
-        if rule is None:
-            detection: dict[str, Any] = {"status": "ok", "hits": [], "breadth": {}}
-            names: dict[str, str] = {}
-        else:
-            prices = validated_signals.fetch_price_history(stock_cursor, as_of_date)
-            detection = validated_signals.detect_breakouts(prices, as_of_date, rule["params"])
-            names = validated_signals.fetch_names(stock_cursor, as_of_date)
-            if ledger_cursor is not None and ledger_connection is not None:
-                tracking_embeds = _update_validated_tracking(
-                    ledger_cursor, ledger_connection, stock_cursor,
-                    rule=rule, registry=registry, as_of_date=as_of_date,
-                    detection=detection, names=names,
-                )
+        states = rule_revalidation.load_rule_states(ledger_cursor, registry)
+        inputs = rule_detection.fetch_inputs(stock_cursor, as_of_date)
+        detection = rule_detection.detect_rules(inputs, as_of_date, [state["id"] for state in states])
+        names = validated_signals.fetch_names(stock_cursor, as_of_date)
         if ledger_cursor is not None and ledger_connection is not None:
-            _settle_shadow_picks(ledger_cursor, ledger_connection, stock_cursor, as_of_date)
+            tracking_embeds = _update_validated_tracking(
+                ledger_cursor, ledger_connection, stock_cursor,
+                states=states, registry=registry, as_of_date=as_of_date,
+                detection=detection, names=names,
+            )
+            if not _settle_shadow_picks(ledger_cursor, ledger_connection, stock_cursor, as_of_date):
+                tracking_embeds.append({
+                    "title": "被關掉的盤中快訊追蹤暫時無法更新",
+                    "description": "影子名單這次結算失敗（已記在系統日誌），下次執行會重試。",
+                    "color": 0xE67E22,
+                })
     finally:
         if stock_conn:
             stock_conn.close()
         if stock_engine:
             stock_engine.dispose()
+    evaluated = [state.get("last_evaluated_on") for state in states if state.get("last_evaluated_on")]
     message, embeds = validated_signals.build_validated_digest(
-        as_of_date, registry, detection, names, tracking_embeds=tracking_embeds,
+        as_of_date, registry, detection, states, names, tracking_embeds=tracking_embeds,
+        transitions=rule_revalidation.recent_transitions(ledger_cursor, as_of_date),
+        evidence_as_of=max(evaluated) if evaluated else None,
     )
     return message, embeds, str(detection.get("status")), str(registry.get("version"))
 
@@ -8654,7 +8658,7 @@ def _record_suppressed_intraday(
     try:
         validated_tracking.record_shadow_candidates(
             cursor, rule=validated_tracking.SHADOW_INTRADAY_RULE,
-            version=str(validated_signals.load_registry().get("version")),
+            version=str(validated_signals.load_registry().get("ruleset")),
             candidates=candidates, now=_now_taipei(),
         )
         connection.commit()
@@ -8674,7 +8678,7 @@ def _record_suppressed_intraday(
     }
 
 
-def _settle_shadow_picks(ledger_cursor, ledger_connection, stock_cursor, as_of_date) -> None:
+def _settle_shadow_picks(ledger_cursor, ledger_connection, stock_cursor, as_of_date) -> bool:
     """Settle matured shadow picks in their own transaction, independent of the live rule."""
 
     try:
@@ -8684,50 +8688,88 @@ def _settle_shadow_picks(ledger_cursor, ledger_connection, stock_cursor, as_of_d
             fetch_prices=validated_signals.fetch_price_history,
         )
         ledger_connection.commit()
+        return True
     except Exception as exc:
         print(f"[market signal] shadow settlement failed: {type(exc).__name__}: {exc}")
         try:
             ledger_connection.rollback()
         except Exception:
             pass
+        return False
 
 
 def _update_validated_tracking(
-    ledger_cursor, ledger_connection, stock_cursor, *, rule, registry, as_of_date,
+    ledger_cursor, ledger_connection, stock_cursor, *, states, registry, as_of_date,
     detection, names,
 ) -> list[dict[str, Any]]:
-    """Record today's hits, settle matured ones, return the tracking embeds.
+    """Record every rule's hits, settle matured picks, return the tracking embeds.
 
-    A tracking failure must not hide the digest, but it must not be silent either:
-    the failure is logged and shown in the digest itself.
+    Active rules record all hits (top names shown); candidates and suspended rules record
+    their strongest hits as never-shown shadow picks, so their live record accumulates
+    from the day they are registered. A rule whose input feed has not landed records
+    nothing that day. A tracking failure must not hide the digest, but it must not be
+    silent either: the failure is logged and shown in the digest itself.
     """
 
+    now = _now_taipei()
+    rule_results = detection.get("rules") or {}
+    failed_rules: list[str] = []
     try:
-        now = _now_taipei()
         if detection.get("status") == "ok":
-            validated_tracking.settle_pending_picks(
-                ledger_cursor, stock_cursor, rule=rule, today=as_of_date, now=now,
-                fetch_prices=validated_signals.fetch_price_history,
-            )
-            validated_tracking.record_picks(
-                ledger_cursor, rule=rule, version=str(registry.get("version")),
-                as_of_date=as_of_date, hits=detection.get("hits") or [], names=names, now=now,
-            )
-            ledger_connection.commit()
-        summary = validated_tracking.live_summary(ledger_cursor, rule["id"])
-        embeds = [{
-            "title": "上線後成績（不是回測）",
-            "description": validated_tracking.tracking_line(summary, rule),
-            "color": 0x16A085,
-        }]
+            for state in states:
+                # one rule's failure must not discard the others' records: commit per rule
+                rule = validated_tracking.tracking_rule(state)
+                try:
+                    validated_tracking.settle_pending_picks(
+                        ledger_cursor, stock_cursor, rule=rule, today=as_of_date, now=now,
+                        fetch_prices=validated_signals.fetch_price_history,
+                    )
+                    result = rule_results.get(state["id"]) or {}
+                    if result.get("status") == "ok":
+                        validated_tracking.record_picks(
+                            ledger_cursor, rule=rule, version=str(registry.get("ruleset")),
+                            as_of_date=as_of_date, hits=result.get("hits") or [], names=names, now=now,
+                        )
+                    ledger_connection.commit()
+                except Exception as exc:
+                    failed_rules.append(str(state.get("label") or state["id"]))
+                    print(f"[market signal] tracking failed for {state['id']}: {type(exc).__name__}: {exc}")
+                    try:
+                        ledger_connection.rollback()
+                    except Exception:
+                        pass
+        active = [state for state in states if state["status"] == "active"]
+        embeds: list[dict[str, Any]] = []
+        if active:
+            lines = [
+                validated_tracking.tracking_line(
+                    validated_tracking.live_summary(ledger_cursor, state["id"], int(state["horizon_sessions"])),
+                    state,
+                )
+                for state in active
+            ]
+            embeds.append({
+                "title": "上線後成績（短期參考，不是回測）",
+                "description": "\n".join([*lines, validated_tracking.LIVE_REFERENCE_NOTE]),
+                "color": 0x16A085,
+            })
         if as_of_date.weekday() == 4:
             policy_start = dt.date.fromisoformat(
                 str(registry.get("policy_started_on") or as_of_date.isoformat())
             )
             card = validated_tracking.weekly_scorecard(
-                ledger_cursor, today=as_of_date, policy_start=policy_start, rule=rule,
+                ledger_cursor, today=as_of_date, policy_start=policy_start, rules=states,
             )
-            embeds.append(validated_tracking.scorecard_embed(card, rule))
+            embeds.append(validated_tracking.scorecard_embed(card, states))
+        if failed_rules:
+            embeds.insert(0, {
+                "title": "上線追蹤暫時無法更新",
+                "description": (
+                    "以下規則今天的追蹤紀錄寫入失敗（已記在系統日誌）：" + "、".join(failed_rules)
+                    + "。這幾天的名單不會自動補記，該日不計入它們的上線追蹤；其他規則不受影響。"
+                ),
+                "color": 0xE67E22,
+            })
         return embeds
     except Exception as exc:
         try:
@@ -8737,7 +8779,7 @@ def _update_validated_tracking(
         print(f"[market signal] validated tracking failed: {type(exc).__name__}: {exc}")
         return [{
             "title": "上線追蹤暫時無法更新",
-            "description": "今天的追蹤紀錄寫入失敗（已記在系統日誌），成績會在下次補上。",
+            "description": "今天的追蹤紀錄寫入失敗（已記在系統日誌），該日不計入上線追蹤。",
             "color": 0xE67E22,
         }]
 

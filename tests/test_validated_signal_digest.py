@@ -1,122 +1,178 @@
 import datetime as dt
 
-import pandas as pd
 import pytest
 
-from source_extension import market_signals, validated_signals
+from source_extension import market_signals, rule_lifecycle, signal_rules, validated_signals, validated_tracking
 
-AS_OF = dt.date(2026, 11, 13)
+AS_OF = dt.date(2026, 11, 13)  # a Friday
 
 
-def _params():
-    rule = next(
-        r for r in validated_signals.active_rules(validated_signals.load_registry())
-        if r["id"] == validated_signals.BREAKOUT_RULE_ID
+def _evidence(horizon=10, after_cost=0.17):
+    return {
+        "horizon": horizon, "oos_dates": 886, "mean_excess_pct": after_cost + 0.6,
+        "mean_excess_after_cost_pct": after_cost, "t_nw": 3.0, "win_rate_pct": 41.0,
+        "base_win_rate_pct": 39.0, "years_total": 11, "years_positive": 9,
+        "recent_reference": {"dates": 63, "mean_excess_after_cost_pct": -0.19},
+    }
+
+
+def _states(active=("breakout_60d_volume",), max_names=5):
+    states = []
+    for rule in signal_rules.RULES:
+        states.append({
+            "id": rule.id, "label": rule.label, "meaning": rule.meaning,
+            "metric_label": rule.metric_label, "metric_format": rule.metric_format,
+            "sources": rule.sources, "is_control": rule.is_control,
+            "status": "active" if rule.id in active else "candidate", "horizon_sessions": 10,
+            "evidence": _evidence(), "from_database": True,
+            "params": {"max_names_shown": max_names, "min_turnover_ntd": 50_000_000},
+        })
+    return states
+
+
+def _hits(count, offset=0):
+    return [
+        {"code": f"{1000 + offset + i}", "close": 50.0 + i, "day_return_pct": 6.5, "metric": 8.0 - i * 0.1}
+        for i in range(count)
+    ]
+
+
+def _detection(rule_hits, status="ok"):
+    rules = {
+        rule.id: {"status": "ok", "missing_feeds": [], "hits": rule_hits.get(rule.id, [])}
+        for rule in signal_rules.RULES
+    }
+    return {"status": status, "rules": rules,
+            "breadth": {"stocks": 1500, "up": 800, "down": 600, "median_return_pct": 0.3}}
+
+
+def _digest(states, detection, **kwargs):
+    return validated_signals.build_validated_digest(
+        AS_OF, validated_signals.load_registry(), detection, states, **kwargs
     )
-    return rule["params"]
 
 
-def _prices(final_overrides, sessions=75):
-    """Flat 100-yuan stocks with 10,000 lots/day, then override the final session."""
-    days = pd.bdate_range(end=pd.Timestamp(AS_OF), periods=sessions)
-    rows = []
-    codes = {"2330", "2317", "1101", "0050", "9999", "2603"}
-    for code in codes:
-        for index, day in enumerate(days):
-            rows.append([day, code, 100.0 + (index % 3) * 0.1, 10_000.0])
-    frame = pd.DataFrame(rows, columns=["date", "code", "close", "vol"])
-    for code, (close, vol) in final_overrides.items():
-        mask = (frame["code"] == code) & (frame["date"] == days[-1])
-        frame.loc[mask, ["close", "vol"]] = [close, vol]
-    return frame
+def _text(message, embeds):
+    return message + "".join(e["title"] + e["description"] for e in embeds)
 
 
-def test_user_only_gets_stocks_that_break_out_with_heavy_volume():
-    """Given one stock breaks its 60-day high on 3x volume, one only jumps on volume,
-    one breaks out on normal volume, and 0050 is an ETF
-    When the as-of session is scanned
-    Then only the true breakout (4-digit stock) is a hit."""
-    prices = _prices({
-        "2330": (120.0, 30_000.0),   # new high + 3x volume -> hit
-        "2317": (99.0, 40_000.0),    # volume only, no new high
-        "1101": (130.0, 10_000.0),   # new high, normal volume
-        "0050": (150.0, 50_000.0),   # ETF excluded by 4-digit rule
-    })
-    detection = validated_signals.detect_breakouts(prices, AS_OF, _params())
-    assert detection["status"] == "ok"
-    assert [hit["code"] for hit in detection["hits"]] == ["2330"]
-    assert detection["hits"][0]["volume_ratio"] == pytest.approx(3.0, rel=0.05)
-    assert detection["breadth"]["stocks"] == 5  # 4-digit liquid names only
-
-
-def test_illiquid_breakouts_are_not_pushed():
-    prices = _prices({"9999": (140.0, 50_000.0)})
-    prices.loc[prices["code"] == "9999", "vol"] = prices.loc[prices["code"] == "9999", "vol"] / 1000
-    prices.loc[(prices["code"] == "9999") & (prices["date"] == prices["date"].max()), "vol"] = 50.0
-    detection = validated_signals.detect_breakouts(prices, AS_OF, _params())
-    assert "9999" not in [hit["code"] for hit in detection["hits"]]
-
-
-def test_missing_as_of_prices_is_data_not_ready_not_no_signal():
-    prices = _prices({})
-    prices = prices[prices["date"] < pd.Timestamp(AS_OF)]
-    detection = validated_signals.detect_breakouts(prices, AS_OF, _params())
-    assert detection["status"] == "data_not_ready"
-    message, embeds = validated_signals.build_validated_digest(
-        AS_OF, validated_signals.load_registry(), detection
-    )
-    text = message + "".join(e["title"] + e["description"] for e in embeds)
+def test_missing_prices_say_not_ready_never_no_signal():
+    detection = {"status": "data_not_ready", "rules": {}, "breadth": {}}
+    message, embeds = _digest(_states(), detection)
+    text = _text(message, embeds)
     assert "價格資料尚未更新" in text
-    assert "今日無通過驗證的訊號" not in text
-    assert "通過驗證的訊號 0 檔" not in text
+    assert "今日沒有符合" not in text
 
 
 def test_quiet_day_is_one_plain_line_not_a_failure():
-    detection = validated_signals.detect_breakouts(_prices({}), AS_OF, _params())
-    message, embeds = validated_signals.build_validated_digest(
-        AS_OF, validated_signals.load_registry(), detection
-    )
+    message, embeds = _digest(_states(), _detection({}))
     titles = [e["title"] for e in embeds]
-    assert "今日無通過驗證的訊號" in titles
-    assert "未能產出" not in message + "".join(e["description"] for e in embeds)
-    assert "通過驗證的訊號 0 檔" in message
+    assert "今日沒有符合推播中規則的股票" in titles
+    assert "未能產出" not in _text(message, embeds)
+    assert "推播中規則的訊號 0 檔" in message
 
 
-def test_digest_with_hits_states_evidence_limits_and_fits_discord_budget():
-    hits = [
-        {"code": f"{1000 + i}", "close": 50.0 + i, "volume_ratio": 8.0 - i * 0.2, "day_return_pct": 6.5}
-        for i in range(12)
-    ]
-    detection = {"status": "ok", "hits": hits,
-                 "breadth": {"stocks": 1500, "up": 800, "down": 600, "median_return_pct": 0.3}}
-    names = {h["code"]: "測試公司" * 3 for h in hits}
-    message, embeds = validated_signals.build_validated_digest(
-        AS_OF, validated_signals.load_registry(), detection, names
+def test_a_rule_whose_feed_is_late_is_reported_as_waiting_not_as_no_hit():
+    detection = _detection({})
+    detection["rules"]["breakout_60d_volume"] = {"status": "data_not_ready", "missing_feeds": ["price"], "hits": []}
+    message, embeds = _digest(_states(), detection)
+    text = _text(message, embeds)
+    assert "今天不判斷，不代表沒有訊號" in text
+    assert "今日沒有符合" not in text
+
+
+def test_digest_states_long_term_evidence_and_labels_the_recent_quarter_as_reference():
+    hits = _hits(12)
+    message, embeds = _digest(
+        _states(), _detection({"breakout_60d_volume": hits}),
+        names={h["code"]: "測試公司" * 3 for h in hits}, evidence_as_of=dt.date(2026, 11, 14),
     )
-    text = "".join(e["description"] for e in embeds)
-    rule = next(iter(validated_signals.active_rules(validated_signals.load_registry())))
-    shown_limit = rule["params"]["max_names_shown"]
-    assert "通過驗證的訊號 12 檔" in message
-    assert sum(1 for hit in hits if f"**{hit['code']} " in text) == shown_limit
-    assert f"另有 {12 - shown_limit} 檔" in text
+    text = _text(message, embeds)
+    assert "目前長期證據（截至 2026-11-14）" in text
+    assert "通過驗證" not in text  # status is a standing long-term record, not a one-off pass
+    assert "最近一季" in text and "不影響規則去留" in text
+    assert sum(1 for h in hits if f"**{h['code']} " in text) == 5
+    assert "另有 7 檔" in text
     assert "不是明牌" in text and "不構成投資建議" in text
-    # the after-cost edge is disclosed, not just the headline number
-    assert f"{rule['evidence']['mean_excess_after_cost_pct']:+.2f}%" in text
+    assert "+0.17%" in text  # the after-cost edge is disclosed, not just the headline
     assert market_signals._discord_request_size(message, embeds) <= market_signals.DISCORD_REQUEST_BYTE_LIMIT
     assert len(market_signals._split_discord_embed_batches(message, embeds)) == 1
 
 
-def test_retired_rule_cannot_push_names():
-    registry = validated_signals.load_registry()
-    for rule in registry["rules"]:
-        rule["status"] = "retired"
-    hits = [{"code": "2330", "close": 100.0, "volume_ratio": 5.0, "day_return_pct": 5.0}]
-    message, embeds = validated_signals.build_validated_digest(
-        AS_OF, registry, {"status": "ok", "hits": hits, "breadth": {}}
+def test_only_active_rules_can_push_names():
+    hits = _hits(3)
+    states = _states(active=())
+    message, embeds = _digest(states, _detection({rule.id: hits for rule in signal_rules.RULES}))
+    text = _text(message, embeds)
+    assert "1000" not in text and "目前沒有推播中的規則" in text
+    assert "推播中規則的訊號 0 檔" in message
+
+
+def test_a_suspended_rule_stops_pushing_immediately():
+    states = _states()
+    states[4]["status"] = rule_lifecycle.SUSPENDED
+    assert states[4]["id"] == "breakout_60d_volume"
+    message, embeds = _digest(states, _detection({"breakout_60d_volume": _hits(2)}))
+    assert "1000" not in _text(message, embeds)
+
+
+def test_a_normal_digest_fits_one_discord_request_on_the_wire_encoding():
+    """The sender measures requests with every CJK character escaped; the digest must pass that test."""
+    hits = _hits(12)
+    states = _states(active=("breakout_60d_volume", "foreign_trust_both_buy_3d"))
+    detection = _detection({"breakout_60d_volume": hits, "foreign_trust_both_buy_3d": _hits(8, offset=40)})
+    message, embeds = _digest(states, detection, names={h["code"]: "測試公司名稱" for h in hits})
+    assert market_signals._discord_request_size(message, embeds) <= market_signals.DISCORD_REQUEST_BYTE_LIMIT
+    assert len(market_signals._split_discord_embed_batches(message, embeds)) == 1
+
+
+def test_all_twelve_rules_active_with_many_hits_still_sends_without_any_oversized_embed():
+    states = _states(active=[rule.id for rule in signal_rules.RULES])
+    detection = _detection({rule.id: _hits(15, offset=i * 20) for i, rule in enumerate(signal_rules.RULES)})
+    names = {h["code"]: "測試公司名稱很長" for i in range(12) for h in _hits(15, offset=i * 20)}
+    live = {s["id"]: validated_tracking.summarize_by_date(
+        [(AS_OF - dt.timedelta(days=d), 0.4, 3) for d in range(1, 40)], 10) for s in states}
+    card = {
+        "before_per_week": {"messages": 30.0, "failed": 2.0, "failure_notices": 1.0},
+        "after_week": {"messages": 6, "failed": 0, "failure_notices": 0},
+        "live": live, "shadow": validated_tracking.summarize_excess([], pending=4),
+    }
+    message, embeds = _digest(
+        states, detection, names=names,
+        tracking_embeds=[validated_tracking.scorecard_embed(card, states)],
+        transitions=[{"rule_id": "breakout_60d_volume", "from": "candidate", "to": "active",
+                      "reason": "長期證據通過完整門檻", "decided_on": AS_OF}],
     )
-    text = message + "".join(e["description"] + e["title"] for e in embeds)
-    assert "2330" not in text
-    assert "通過驗證的訊號 0 檔" in message
+    # too much for one request, but the sender must be able to split it (it raises on a single oversized embed)
+    batches = market_signals._split_discord_embed_batches(message, embeds)
+    assert len(batches) >= 2
+    for batch in batches:
+        assert market_signals._discord_request_size(message, batch) <= market_signals.DISCORD_REQUEST_BYTE_LIMIT
+    assert "規則狀態變更" in _text(message, embeds)
+
+
+def test_long_embeds_are_split_on_line_boundaries_without_losing_text():
+    lines = [f"line {i} " + "字" * 40 for i in range(60)]
+    parts = validated_signals.split_long_embeds([{"title": "T", "description": chr(10).join(lines)}])
+    assert len(parts) > 1 and parts[1]["title"].startswith("T（續")
+    assert chr(10).join(p["description"] for p in parts) == chr(10).join(lines)
+    assert all(len(p["description"]) <= validated_signals.EMBED_MAX_CHARS for p in parts)
+
+
+def test_unreadable_rule_status_is_disclosed_not_silently_replaced_by_the_seed():
+    states = _states()
+    for state in states:
+        state["status_source"] = "fallback_error"
+    message, embeds = _digest(states, _detection({}))
+    assert "規則狀態讀取失敗" in [e["title"] for e in embeds]
+
+
+def test_status_changes_are_announced_in_plain_words():
+    transitions = [{"rule_id": "breakout_60d_volume", "from": "active", "to": "suspended",
+                    "reason": "長期扣成本後超額報酬轉為負", "decided_on": AS_OF}]
+    message, embeds = _digest(_states(), _detection({}), transitions=transitions)
+    change = next(e for e in embeds if e["title"] == "規則狀態變更")
+    assert "推播中" in change["description"] and "暫停推播" in change["description"]
 
 
 class _Closable:
@@ -160,28 +216,11 @@ def test_capture_failure_notice_still_sends_when_ledger_is_unreachable(monkeypat
     assert seen["cursor"] is None
 
 
-def test_partial_price_landing_is_not_reported_as_no_signal():
-    """Only a few names landed for the as-of session -> not ready, never 'no signal'."""
-    prices = _prices({})
-    last = prices["date"].max()
-    keep = prices[(prices["date"] < last) | (prices["code"] == "2330")]
-    detection = validated_signals.detect_breakouts(keep, AS_OF, _params())
-    assert detection["status"] == "data_not_ready"
-
-
-def test_zero_prior_volume_cannot_create_infinite_ratio_hit():
-    prices = _prices({"2330": (150.0, 20_000.0)})
-    mask = (prices["code"] == "2330") & (prices["date"] < prices["date"].max())
-    prices.loc[mask, "vol"] = 0.0
-    detection = validated_signals.detect_breakouts(prices, AS_OF, _params())
-    assert all(hit["volume_ratio"] != float("inf") for hit in detection["hits"])
-
-
 def test_daily_dedupe_key_cannot_collide_with_legacy_or_not_ready_message():
     legacy = market_signals._daily_digest_dedupe_key("2026-11-13", 1, 1)
-    ok = market_signals._daily_digest_dedupe_key("2026-11-13", 1, 1, status="ok", version="validated_v1")
+    ok = market_signals._daily_digest_dedupe_key("2026-11-13", 1, 1, status="ok", version="validated_v2")
     late = market_signals._daily_digest_dedupe_key(
-        "2026-11-13", 1, 1, status="data_not_ready", version="validated_v1"
+        "2026-11-13", 1, 1, status="data_not_ready", version="validated_v2"
     )
     assert len({legacy, ok, late}) == 3
 
@@ -204,57 +243,116 @@ def test_intraday_failure_notice_is_silent_while_intraday_push_is_off(monkeypatc
     assert len(sent) == 1
 
 
+class _Conn:
+    def __init__(self):
+        self.events = []
+
+    def commit(self):
+        self.events.append("commit")
+
+    def rollback(self):
+        self.events.append("rollback")
+
+
 def test_tracking_failure_is_visible_in_the_digest_not_silent(monkeypatch):
-    class Conn:
-        rolled_back = False
-
-        def rollback(self):
-            Conn.rolled_back = True
-
     def boom(*args, **kwargs):
         raise ConnectionError("ledger down")
 
     monkeypatch.setattr(market_signals.validated_tracking, "settle_pending_picks", boom)
-    rule = next(iter(validated_signals.active_rules(validated_signals.load_registry())))
+    conn = _Conn()
     embeds = market_signals._update_validated_tracking(
-        object(), Conn(), object(), rule=rule, registry=validated_signals.load_registry(),
-        as_of_date=AS_OF, detection={"status": "ok", "hits": [], "breadth": {}}, names={},
+        object(), conn, object(), states=_states(), registry=validated_signals.load_registry(),
+        as_of_date=AS_OF, detection=_detection({}), names={},
     )
     assert embeds[0]["title"] == "上線追蹤暫時無法更新"
-    assert Conn.rolled_back
+    assert "rollback" in conn.events
+
+
+def test_one_rules_tracking_failure_does_not_discard_the_other_rules_records(monkeypatch):
+    recorded = []
+
+    def settle(cursor, stock_cursor, *, rule, **kwargs):
+        if rule["id"] == "trust_buy_5d_top":
+            raise ConnectionError("deadlock")
+
+    monkeypatch.setattr(market_signals.validated_tracking, "settle_pending_picks", settle)
+    monkeypatch.setattr(
+        market_signals.validated_tracking, "record_picks",
+        lambda cursor, *, rule, **kwargs: recorded.append(rule["id"]),
+    )
+    monkeypatch.setattr(
+        market_signals.validated_tracking, "live_summary",
+        lambda cursor, rule_id, horizon=None: validated_tracking.summarize_by_date([], 10),
+    )
+    conn = _Conn()
+    embeds = market_signals._update_validated_tracking(
+        object(), conn, object(), states=_states(), registry=validated_signals.load_registry(),
+        as_of_date=dt.date(2026, 11, 12), detection=_detection({}), names={},
+    )
+    assert "trust_buy_5d_top" not in recorded and "breakout_60d_volume" in recorded
+    assert len(recorded) == len(signal_rules.RULES) - 1
+    assert conn.events.count("rollback") == 1 and conn.events.count("commit") == len(signal_rules.RULES) - 1
+    assert embeds[0]["title"] == "上線追蹤暫時無法更新" and "不會自動補記" in embeds[0]["description"]
 
 
 def test_tracking_is_not_recorded_while_prices_are_not_ready(monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        market_signals.validated_tracking, "record_picks", lambda *a, **k: calls.append("record")
-    )
-    monkeypatch.setattr(
-        market_signals.validated_tracking, "settle_pending_picks", lambda *a, **k: calls.append("settle")
-    )
+    monkeypatch.setattr(market_signals.validated_tracking, "record_picks", lambda *a, **k: calls.append("record"))
+    monkeypatch.setattr(market_signals.validated_tracking, "settle_pending_picks", lambda *a, **k: calls.append("settle"))
     monkeypatch.setattr(
         market_signals.validated_tracking, "live_summary",
-        lambda cursor, rule_id: validated_tracking_summary(),
+        lambda cursor, rule_id, horizon=None: validated_tracking.summarize_by_date([], 10, pending=3),
     )
-
-    class Conn:
-        def commit(self):
-            calls.append("commit")
-
-    rule = next(iter(validated_signals.active_rules(validated_signals.load_registry())))
+    conn = _Conn()
     embeds = market_signals._update_validated_tracking(
-        object(), Conn(), object(), rule=rule, registry=validated_signals.load_registry(),
+        object(), conn, object(), states=_states(), registry=validated_signals.load_registry(),
         as_of_date=dt.date(2026, 11, 12),  # a Thursday: no weekly scorecard
-        detection={"status": "data_not_ready", "hits": [], "breadth": {}}, names={},
+        detection={"status": "data_not_ready", "rules": {}, "breadth": {}}, names={},
     )
-    assert calls == []
-    assert embeds[0]["title"] == "上線後成績（不是回測）"
+    assert calls == [] and conn.events == []
+    assert embeds[0]["title"].startswith("上線後成績")
 
 
-def validated_tracking_summary():
-    from source_extension import validated_tracking
+def test_every_rules_hits_are_tracked_but_only_active_rules_are_ever_marked_shown(monkeypatch):
+    recorded = {}
 
-    return validated_tracking.summarize_excess([], pending=3)
+    def fake_record(cursor, *, rule, version, as_of_date, hits, names, now):
+        recorded[rule["id"]] = (rule["params"]["max_names_shown"], len(hits))
+
+    monkeypatch.setattr(market_signals.validated_tracking, "record_picks", fake_record)
+    monkeypatch.setattr(market_signals.validated_tracking, "settle_pending_picks", lambda *a, **k: {})
+    monkeypatch.setattr(
+        market_signals.validated_tracking, "live_summary",
+        lambda cursor, rule_id, horizon=None: validated_tracking.summarize_by_date([], 10),
+    )
+    detection = _detection({"breakout_60d_volume": _hits(4), "trust_buy_5d_top": _hits(6)})
+    market_signals._update_validated_tracking(
+        object(), _Conn(), object(), states=_states(), registry=validated_signals.load_registry(),
+        as_of_date=dt.date(2026, 11, 12), detection=detection, names={},
+    )
+    assert recorded["breakout_60d_volume"] == (5, 4)
+    assert recorded["trust_buy_5d_top"] == (0, 6)  # candidate: tracked, shown=0 for every row
+    assert len(recorded) == len(signal_rules.RULES)
+
+
+def test_a_rule_whose_feed_has_not_landed_records_nothing_that_day(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(
+        market_signals.validated_tracking, "record_picks",
+        lambda cursor, *, rule, **kwargs: recorded.append(rule["id"]),
+    )
+    monkeypatch.setattr(market_signals.validated_tracking, "settle_pending_picks", lambda *a, **k: {})
+    monkeypatch.setattr(
+        market_signals.validated_tracking, "live_summary",
+        lambda cursor, rule_id, horizon=None: validated_tracking.summarize_by_date([], 10),
+    )
+    detection = _detection({})
+    detection["rules"]["margin_cleanup_up"] = {"status": "data_not_ready", "missing_feeds": ["margin"], "hits": []}
+    market_signals._update_validated_tracking(
+        object(), _Conn(), object(), states=_states(), registry=validated_signals.load_registry(),
+        as_of_date=dt.date(2026, 11, 12), detection=detection, names={},
+    )
+    assert "margin_cleanup_up" not in recorded and "breakout_60d_volume" in recorded
 
 
 class _LedgerCursor:
@@ -266,21 +364,10 @@ class _LedgerCursor:
         self.statements.append((sql, params))
 
 
-class _LedgerConn:
-    def __init__(self):
-        self.events = []
-
-    def commit(self):
-        self.events.append("commit")
-
-    def rollback(self):
-        self.events.append("rollback")
-
-
 def test_intraday_cursor_advance_survives_a_shadow_tracking_failure(monkeypatch):
     """The cursor advance is committed before best-effort tracking, so a tracking
     error can never roll it back (it would otherwise repeat on every run)."""
-    cursor, conn = _LedgerCursor(), _LedgerConn()
+    cursor, conn = _LedgerCursor(), _Conn()
 
     def boom(*args, **kwargs):
         raise ValueError("bad candidate")
@@ -295,7 +382,7 @@ def test_intraday_cursor_advance_survives_a_shadow_tracking_failure(monkeypatch)
 
 
 def test_intraday_candidates_are_recorded_after_the_cursor_commit(monkeypatch):
-    cursor, conn = _LedgerCursor(), _LedgerConn()
+    cursor, conn = _LedgerCursor(), _Conn()
     seen = {}
     monkeypatch.setattr(
         market_signals.validated_tracking, "record_shadow_candidates",
@@ -309,7 +396,7 @@ def test_intraday_candidates_are_recorded_after_the_cursor_commit(monkeypatch):
 
 
 def test_shadow_settlement_failure_does_not_touch_the_live_tracking_transaction(monkeypatch):
-    conn = _LedgerConn()
+    conn = _Conn()
 
     def boom(*args, **kwargs):
         raise ConnectionError("stock db down")

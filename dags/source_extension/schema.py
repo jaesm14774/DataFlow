@@ -516,6 +516,15 @@ SCHEMA_STATEMENTS = (
         PRIMARY KEY (rule_id, horizon, signal_date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
+    """
+    CREATE TABLE IF NOT EXISTS validated_feed_landing (
+        signal_date DATE NOT NULL,
+        feed VARCHAR(16) NOT NULL,
+        landed TINYINT NOT NULL,
+        recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (signal_date, feed)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
 )
 
 PORTFOLIO_SCHEMA_STATEMENTS = tuple(

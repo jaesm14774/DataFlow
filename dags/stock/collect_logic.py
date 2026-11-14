@@ -17,6 +17,7 @@ from lib.log_process_execution import BaseLogRecord
 from lib.db_connection import MySQLConnection as _BaseMySQLConnection
 import boto3
 from io import StringIO
+from stock import margin_daily
 
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"]="python"
@@ -1397,6 +1398,17 @@ class StockMajorHolderCollectProcess(StockCollectLogic):
             for market in ('上市', '上櫃')
         }
 
+    skipped_as_loaded=False
+
+    def _snapshot_loaded_codes(self,effective_date):
+        """該週快照已在大戶比例表中的證券數（資料日期在此表為 YYYYMMDD 文字）。"""
+        day=effective_date.strftime('%Y%m%d')
+        frame=pd.read_sql_query(
+            f"select count(distinct 證券代號) as n from {self.table_name} where 資料日期 = '{day}'",
+            self.engine,
+        )
+        return int(frame['n'].iloc[0])
+
     def rearrange_data(self,df):
         """
         重整從集保中心收集到的資訊，轉成大戶比格式
@@ -1505,6 +1517,26 @@ class StockMajorHolderCollectProcess(StockCollectLogic):
         effective_date=parsed_dates.iloc[0].date()
         if effective_date > self.now_time.date():
             raise ValueError('TDCC shareholding batch is dated after the collection date')
+        # 每日輪詢: 這一週的快照若已完整入庫就直接跳過。重寫同一週不會帶來新資料，卻會改掉
+        # create_time（讓「這週資料何時第一次出現」的證據消失）。放在新鮮度檢查之前，已入庫的
+        # 舊週不會每天都以失敗收場；是否過舊由訊號摘要的過期旗標負責顯示。
+        loaded_codes=self._snapshot_loaded_codes(effective_date)
+        market_expected=len(set().union(*self.market_codes_by_market.values()))
+        if market_expected and loaded_codes >= 0.95*market_expected:
+            print(
+                '[stock_major_holder] TDCC snapshot already loaded, skipping '
+                f'| effective_date={effective_date.isoformat()}'
+                f' | loaded_codes={loaded_codes}/{market_expected}'
+            )
+            self.result=[]
+            self.effective_date=effective_date.isoformat()
+            self.skipped_as_loaded=True
+            return
+        print(
+            '[stock_major_holder] new TDCC snapshot detected '
+            f'| effective_date={effective_date.isoformat()}'
+            f' | loaded_codes={loaded_codes}/{market_expected}'
+        )
         latest_market_value=pd.read_sql_query(
             'SELECT MAX(資料日期) AS latest_date FROM 個股成交資訊', self.engine
         )['latest_date'].iloc[0]
@@ -1679,11 +1711,17 @@ class StockMarginTradeCollectProcess(StockCollectLogic):
     融資券收集
     """
     table_name='融資融券'
-    _diff_table_name='股票模板_diff2'
+    # 專屬暫存表: 股票模板_diff2 同時被其他收集程式 TRUNCATE 與寫入，每日執行後
+    # 與它們共用會互相清掉對方的暫存資料。
+    _diff_table_name='融資融券_diff'
     app_name='stock_margin_trade'
 
     def __init__(self):
         super().__init__()
+        self.cursor.execute(
+            f'CREATE TABLE IF NOT EXISTS {self._diff_table_name} LIKE 股票模板_diff2'
+        )
+        self.conn.commit()
         all_code_info=pd.read_sql_query(
             'select 證券代號 from 全證券代碼相關資料表', self.engine
         )
@@ -1817,6 +1855,68 @@ class StockMarginTradeCollectProcess(StockCollectLogic):
             #insert data
             self.result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
             self.insert_count=len(self.result)
+
+
+class StockMarginTradeDailyProcess(StockMarginTradeCollectProcess):
+    """
+    每日融資融券收集（交易日晚間）。
+
+    與週六完整收集共用同一份爬蟲與刪除再寫入邏輯（以 證券代號+資料日期 為鍵，可重複執行），差別在：
+    - 只抓最近 45 天內實際有融資融券資料的證券，省去約 1/7 沒有資料的頁面與其重試；
+    - 儲存之後驗證「目標交易日」是否真的被收到：目標日的證券數要達到近期每日常態的 90%，
+      否則先保存已收到的資料，再讓任務失敗，交給重試補齊。
+    """
+    app_name='stock_margin_trade_daily'
+    # 週六完整收集與每日收集各用自己的暫存表，兩者即使時間重疊也不會互相清掉對方的鍵
+    _diff_table_name='融資融券_diff_daily'
+
+    def __init__(self,target_date=None):
+        super().__init__()
+        self.target_date=pd.Timestamp(target_date or self.now_time.date()).date()
+        start=(pd.Timestamp(self.target_date)-pd.Timedelta(days=45)).strftime('%Y-%m-%d')
+        recent=pd.read_sql_query(
+            f"""
+            select 資料日期, count(distinct 證券代號) as n
+            from 融資融券
+            where 資料日期 >= '{start}'
+            group by 資料日期
+            """,
+            self.engine,
+        )
+        self.baseline_codes=margin_daily.baseline_code_count(
+            pd.Series(recent['n'].values,index=pd.to_datetime(recent['資料日期'])),
+            self.target_date,
+        )
+        eligible=pd.read_sql_query(
+            f"select distinct 證券代號 from 融資融券 where 資料日期 >= '{start}'",
+            self.engine,
+        )['證券代號'].astype(str).tolist()
+        if eligible:
+            eligible=set(eligible)
+            self.all_code=[code for code in self.all_code if str(code) in eligible]
+
+    def source_latest_date(self,code=margin_daily.PROBE_CODE):
+        """探測頁面（一次請求）最新一列的日期，用來判斷來源是否已公布目標交易日。"""
+        return self.get_margin_data(code)['資料日期'].max()
+
+    def save(self):
+        super().save()
+        # 以資料庫實際存量判斷（重跑時爬到一部分、但庫裡早已完整，不應誤報）
+        stored=pd.read_sql_query(
+            f"""
+            select count(distinct 證券代號) as n from 融資融券
+            where 資料日期 = '{self.target_date.strftime('%Y-%m-%d')}'
+            """,
+            self.engine,
+        )['n'].iloc[0]
+        coverage=margin_daily.coverage_from_count(int(stored),self.target_date,self.baseline_codes)
+        self.coverage=coverage
+        print(f'[{self.app_name}] 目標交易日覆蓋 | {coverage.describe()}')
+        if not coverage.accepted:
+            raise ValueError(
+                '融資融券目標交易日資料不足（已保存已收到的部分，等待重試補齊）: '
+                f'{coverage.describe()}'
+            )
 
 
 class StockMonthRevenueCollectProcess(StockCollectLogic):

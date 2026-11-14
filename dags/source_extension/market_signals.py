@@ -8606,6 +8606,7 @@ def _build_validated_daily_digest(
         states = rule_revalidation.load_rule_states(ledger_cursor, registry)
         inputs = rule_detection.fetch_inputs(stock_cursor, as_of_date)
         detection = rule_detection.detect_rules(inputs, as_of_date, [state["id"] for state in states])
+        _record_feed_landing(ledger_cursor, ledger_connection, as_of_date, detection)
         names = validated_signals.fetch_names(stock_cursor, as_of_date)
         if ledger_cursor is not None and ledger_connection is not None:
             tracking_embeds = _update_validated_tracking(
@@ -8676,6 +8677,23 @@ def _record_suppressed_intraday(
         "sent": 0, "failed": 0, "mode": "intraday",
         "candidates": len(candidates), "suppressed": len(candidates),
     }
+
+
+def _record_feed_landing(ledger_cursor, ledger_connection, as_of_date, detection) -> None:
+    """Persist which feeds had landed when this digest was built (tracking for the collection change)."""
+
+    landing = (detection or {}).get("landing") or {}
+    if not landing or ledger_cursor is None or ledger_connection is None:
+        return
+    try:
+        validated_tracking.record_feed_landing(ledger_cursor, as_of_date, landing)
+        ledger_connection.commit()
+    except Exception as exc:
+        try:
+            ledger_connection.rollback()
+        except Exception:
+            pass
+        print(f"[market signal] feed landing not recorded: {type(exc).__name__}: {exc}")
 
 
 def _settle_shadow_picks(ledger_cursor, ledger_connection, stock_cursor, as_of_date) -> bool:

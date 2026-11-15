@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import datetime
 from common.config import *
+from lib.taipei_time import taipei_now
 
 user_agent=pd.read_csv(user_agent_path,sep=r'\n').useragent.tolist()
 
@@ -23,7 +24,7 @@ class NewsLogic(object):
             'User-Agent': str(np.random.choice(user_agent)),
             'Referer': 'https://www.google.com.tw/?hl=zh_TW'
         }
-        self._now_time=format(datetime.datetime.now()+datetime.timedelta(hours=8),'%Y-%m-%d %H:%M:%S')
+        self._now_time=taipei_now().strftime('%Y-%m-%d %H:%M:%S')
 
     def get_article_url_from(self):
         pass

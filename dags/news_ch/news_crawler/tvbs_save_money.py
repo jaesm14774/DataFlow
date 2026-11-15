@@ -18,13 +18,9 @@ class TVBS_SaveMoney(NewsLogic):
         return json.loads(json_str)    
 
     def get_article_url_from(self):
-        from lib.get_sql import get_sql
-        from common.config import sql_configure_path
+        from lib.get_sql import get_sql_from_config
 
-        connection=pd.read_csv(sql_configure_path,encoding='utf_8_sig',index_col='name')
-        conn,cursor,engine=get_sql(connection.loc['host','value'],connection.loc['port','value'],
-                                    connection.loc['user','value'],connection.loc['password','value'],
-                                    'news_ch')
+        conn,cursor,engine=get_sql_from_config('news_ch')
 
         for page_num in range(1,self._page+1):
             response=requests.post(f'{self._domain_url}/{page_num}',headers=self._headers, timeout=20)

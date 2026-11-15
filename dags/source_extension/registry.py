@@ -9,10 +9,7 @@ import os
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
-import pandas as pd
-
-from common.config import sql_configure_path
-from lib.get_sql import get_sql
+from lib.get_sql import get_sql_from_config
 from source_extension.adapters import (
     MAX_MAPPED_SOURCES,
     SOURCE_CONTRACTS,
@@ -47,14 +44,7 @@ def _now() -> dt.datetime:
 
 
 def _open_connection():
-    connection = pd.read_csv(sql_configure_path, index_col="name")
-    return get_sql(
-        connection.loc["host", "value"],
-        int(connection.loc["port", "value"]),
-        connection.loc["user", "value"],
-        connection.loc["password", "value"],
-        DATABASE_NAME,
-    )
+    return get_sql_from_config(DATABASE_NAME)
 
 
 def priority_score(
@@ -2270,14 +2260,7 @@ def _load_stock_market_codes(
 ) -> set[tuple[str, str]]:
     """Load current security codes, optionally restricting breadth to CFI ES* shares."""
 
-    connection = pd.read_csv(sql_configure_path, index_col="name")
-    conn, cursor, engine = get_sql(
-        connection.loc["host", "value"],
-        int(connection.loc["port", "value"]),
-        connection.loc["user", "value"],
-        connection.loc["password", "value"],
-        "stock",
-    )
+    conn, cursor, engine = get_sql_from_config("stock")
     try:
         equity_filter = " AND CFICode LIKE 'ES%'" if common_equity_only else ""
         cursor.execute(

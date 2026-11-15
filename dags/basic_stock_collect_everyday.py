@@ -7,13 +7,10 @@ from airflow.sensors.time_sensor import TimeSensor
 from airflow.utils.edgemodifier import Label
 
 from stock.collect_process import *
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 
 #Discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式執行狀態','token']
-notify=DiscordNotify()
-notify.webhook_url=token
+notify=discord_notifier('程式執行狀態', discord_token_path)
 
 default_args = {
         'owner': 'jaesm14774',    
@@ -24,8 +21,7 @@ default_args = {
         'email_on_failure': False,
         'email_on_retry': False,
         'execution_timeout': datetime.timedelta(seconds=21600),
-        # If a task fails, retry it once after waiting
-        # at least 5 minutes
+        # If a task fails, retry it twice, 15 minutes apart
         'retries': 2,
         'retry_delay': datetime.timedelta(minutes=15),
         'tags':'stock collect everyday',

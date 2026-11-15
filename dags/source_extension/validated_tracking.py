@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .coerce import as_date as _as_date
 from .rule_lifecycle import (
     MIN_DATES_FOR_STATS, REFERENCE_WINDOW_DATES, STATUS_LABELS, newey_west_t,
 )
@@ -82,14 +83,6 @@ def record_picks(
         )
         inserted += int(getattr(cursor, "rowcount", 0) or 0)
     return inserted
-
-
-def _as_date(value) -> dt.date:
-    if isinstance(value, dt.datetime):
-        return value.date()
-    if isinstance(value, dt.date):
-        return value
-    return dt.date.fromisoformat(str(value)[:10])
 
 
 def record_shadow_candidates(

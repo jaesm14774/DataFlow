@@ -1,6 +1,7 @@
 from stock.collect_logic import *
 from lib.common_tool import task_wrapper
 from lib.taiwan_market_calendar import is_taiwan_stock_market_closed
+from lib.taipei_time import taipei_now
 from stock import margin_daily
 
 START=1
@@ -92,7 +93,7 @@ def is_taiwan_stock_close(task_name='stock_all_code_info_collect'):
     today=(
         datetime.datetime.strptime(BACKFILL_DATE, '%Y-%m-%d').date()
         if BACKFILL_DATE
-        else (datetime.datetime.now()+datetime.timedelta(hours=8)).date()
+        else taipei_now().date()
     )
     is_holiday = is_taiwan_stock_market_closed(today)
     next_task = 'stock_collect_process_is_done' if is_holiday else task_name
@@ -106,7 +107,7 @@ def is_weekend():
     if BACKFILL_DATE:
         now_time=datetime.datetime.strptime(BACKFILL_DATE, '%Y-%m-%d')
     else:
-        now_time=(datetime.datetime.now()+datetime.timedelta(hours=8))
+        now_time=taipei_now()
     if now_time.weekday() in [5]:
         return ['stock_major_holder_collect','stock_margin_trade_collect','stock_month_revenue_collect']
     else:
@@ -132,11 +133,8 @@ def margin_trade_collect():
 #失敗時送到「程式執行狀態」頻道（與每週收集同一個 webhook）；讀不到設定就不掛回呼，不讓 DAG 匯入失敗
 def failure_callback():
     try:
-        from lib.notify import DiscordNotify
-        token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name').loc['程式執行狀態','token']
-        notify=DiscordNotify()
-        notify.webhook_url=token
-        return notify.task_custom_failure_function
+        from lib.notify import discord_notifier
+        return discord_notifier('程式執行狀態', discord_token_path).task_custom_failure_function
     except Exception as exc:
         print(f'[stock DAG] 失敗通知未設定: {type(exc).__name__}: {exc}')
         return None
@@ -147,7 +145,7 @@ def margin_daily_target_date(logical_date=None):
         return datetime.datetime.strptime(BACKFILL_DATE, '%Y-%m-%d').date()
     if logical_date is not None:
         return logical_date.in_timezone('Asia/Taipei').date()
-    return (datetime.datetime.now()+datetime.timedelta(hours=8)).date()
+    return taipei_now().date()
 
 #休市日不收集（回傳 False 讓 ShortCircuit 略過後續節點）
 def margin_daily_is_trading_day(logical_date=None):

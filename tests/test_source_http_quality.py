@@ -5,23 +5,15 @@ import json
 import pytest
 import requests
 
+from http_fixture import make_response
 from source_extension import adapters
 
 
-def response(body, status=200, encoding="utf-8", content_type="application/json"):
-    item = requests.Response()
-    item.status_code = status
-    item.encoding = encoding
-    item.headers["Content-Length"] = str(len(body))
-    item.headers["Content-Type"] = content_type
-    item._content = body
-    item._content_consumed = True
-    return item
-
-
 def fetch(monkeypatch, body, status=200, encoding="utf-8"):
-    item = response(body, status, encoding)
+    item = make_response(body, status, encoding=encoding)
     monkeypatch.setattr(adapters.requests, "get", lambda *args, **kwargs: item)
+    # Bad bodies are retried with backoff; never actually wait in tests.
+    monkeypatch.setattr(adapters.time, "sleep", lambda *_: None)
     return adapters._fetch_source_json_payload(
         "taifex_futures_large_trader_positions_daily",
         "https://example.invalid/source",

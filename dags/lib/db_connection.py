@@ -1,8 +1,5 @@
-from urllib.parse import quote_plus
-from sqlalchemy import create_engine
-import pymysql
-import pandas as pd
-from common.config import sql_configure_path as _default_sql_configure_path
+from lib.db_upsert import replace_by_keys
+from lib.get_sql import get_sql_from_config
 
 
 class MySQLConnection:
@@ -17,23 +14,16 @@ class MySQLConnection:
     """
 
     def __init__(self, db_name, sql_configure_path=None):
-        cfg_path = sql_configure_path or _default_sql_configure_path
-        connection = pd.read_csv(cfg_path, index_col='name')
-
         self.db_name = db_name
-        host = connection.loc['host', 'value']
-        port = int(connection.loc['port', 'value'])
-        user = connection.loc['user', 'value']
-        password = connection.loc['password', 'value']
-
-        self.conn = pymysql.connect(
-            host=host, port=port, user=user,
-            password=password, db=self.db_name,
+        self.conn, self.cursor, self.engine = get_sql_from_config(
+            db_name, sql_configure_path,
         )
-        self.cursor = self.conn.cursor()
-        self.engine = create_engine(
-            'mysql+mysqldb://%s:%s@%s:%s/%s?charset=utf8mb4'
-            % (user, quote_plus(password), host, port, self.db_name)
+
+    def replace_by_keys(self, df, table_name, diff_table_name, keys, diff_columns=None):
+        """delete-insert：刪掉 table_name 內與 df 同 keys 的舊資料後整批寫入 df。"""
+        return replace_by_keys(
+            df, table_name, diff_table_name, keys,
+            self.conn, self.cursor, self.engine, diff_columns,
         )
 
     def end(self):

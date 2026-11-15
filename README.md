@@ -34,9 +34,8 @@ DataFlow is designed to streamline the collection and processing of financial da
 - **SQLAlchemy**: ORM for database interactions
 - **OpenCV**: Computer vision library used for image processing
 - **Selenium**: Browser automation for websites that require JavaScript rendering
-- **Discord & Line API Integration**: For sending notifications and alerts
+- **Discord Webhook Integration**: For sending notifications and alerts (`dags/lib/notify.py`)
 - **Google Maps API**: For geolocation services
-- **OpenCC**: For Chinese text conversion between different character sets
 
 ## Project Structure
 
@@ -68,7 +67,7 @@ DataFlow is designed to streamline the collection and processing of financial da
 ### Key Directories
 
 - **[dags/](./dags/)**: Contains all the Airflow DAG definitions that orchestrate the data collection and processing workflows.
-- **[dags/lib/](./dags/lib/)**: Core library functions used across different DAGs, including database connections, notification systems, and common tools.
+- **[dags/lib/](./dags/lib/)**: Shared building blocks used across DAGs: `get_sql.py` (`get_sql_from_config` — the one place that reads `sql_config`), `db_upsert.py` (`replace_by_keys` delete-then-insert), `notify.py` (`discord_notifier(label, token_path=None)`), plus logging and calendar helpers. New DAGs should use these instead of re-reading the config files.
 - **[dags/news_ch/](./dags/news_ch/)**: Modules for collecting news from various Chinese news sources.
 - **[dags/stock/](./dags/stock/)**: Components for collecting and analyzing stock market data.
 - **[plugins/](./plugins/)**: Custom Airflow plugins and external tools used by the system.
@@ -79,7 +78,7 @@ DataFlow is designed to streamline the collection and processing of financial da
 
 | Skill | 說明 |
 |-------|------|
-| `component-refactoring` | 適用 **Dify 前端** `web/`：高複雜度 React 元件重構（hooks 抽出、子元件拆分、`pnpm analyze-component` / `pnpm refactor-component`）。主檔：`.cursor/skills/component-refactoring/SKILL.md`，細節見 `references/`。 |
+| `python-refactor` | Python 重構方法論：測試先行、可維護優先、避免過度封裝與假測試。主檔：`.cursor/skills/python-refactor/SKILL.md`。 |
 
 ## External Libraries and Resources
 
@@ -91,9 +90,7 @@ DataFlow is designed to streamline the collection and processing of financial da
 - [Selenium](https://www.selenium.dev/)
 - [OpenCV](https://opencv.org/)
 - [Discord Webhook API](https://discord.com/developers/docs/resources/webhook)
-- [Line Notify API](https://notify-bot.line.me/doc/en/)
 - [Google Maps API](https://developers.google.com/maps)
-- [OpenCC](https://github.com/BYVoid/OpenCC)
 
 ## System Requirements
 

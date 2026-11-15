@@ -9,9 +9,8 @@ import json
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
-from common.config import *
 from lib.log_process_execution import BaseLogRecord
-from lib.get_sql import get_sql
+from lib.get_sql import get_sql_from_config
 
 default_args = {
         'owner': 'jaesm14774',    
@@ -25,40 +24,15 @@ default_args = {
     }
 
 
-headers={
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36',
-    'referer': 'https://trends.google.com/trends/trendingsearches/daily?geo=TW',
-}
-
 app_name = 'google_daily_trend'
 database_name = 'google'
 table_name = 'hot_search'
 
 #初始化log
-log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                         app_name=app_name)
+log_record=BaseLogRecord(app_name=app_name)
 
 conn=cursor=engine=None
 
-
-# #get google daily trend all country available
-# def country_crawler(engine):
-#     a=requests.get('https://trends.google.com/trends/trendingsearches/daily',headers={
-#                         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36',
-#                         'referer': 'https://trends.google.com/trends/trendingsearches/daily?geo=TW',
-#                     }, timeout=20)
-#     soup=BeautifulSoup(a.text,'lxml')
-
-#     str_soup=str(soup)
-#     str_soup=str_soup[(str_soup.find('var geoPicker = ')+16):]
-#     str_soup=str_soup[:str_soup.find(';')]
-
-#     country=json.loads(str_soup)
-
-#     pd.DataFrame(country).rename(columns={'id':'country_abbrev_en_name','name':'country_ch_name'}).to_sql('country',
-#                                                                                                         engine,
-#                                                                                                         index=False,
-#                                                                                                         if_exists='append')
 
 def get_board(engine):
     board_table_name='country'
@@ -95,9 +69,7 @@ def search(geo,board_id,date):
 def crawler(date=datetime.datetime.now().strftime('%Y%m%d')):
     global conn,cursor,engine
     if conn is None or not getattr(conn,'open',False):
-        connection=pd.read_csv(sql_configure_path,encoding='utf_8_sig',index_col='name')
-        conn,cursor,engine=get_sql(connection.loc['host','value'],connection.loc['port','value'],
-                                    connection.loc['user','value'],connection.loc['password','value'],database_name)
+        conn,cursor,engine=get_sql_from_config(database_name)
         before_count=pd.read_sql_query(f'select count(1) as N from {table_name}',engine)['N'].iloc[0]
         log_record.set_before_count(before_count)
     _select_col=['cid','keyword','hot_level','created_at']

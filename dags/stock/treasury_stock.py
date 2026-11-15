@@ -1,5 +1,6 @@
 from stock.collect_logic import *
-from lib.notify import DiscordNotify
+from stock.parsing import roc_to_gregorian_text, gregorian_to_roc_text
+from lib.notify import discord_notifier
 from dateutil.relativedelta import relativedelta
 import time
 
@@ -25,13 +26,8 @@ class StockTreasuryHistoryInfoCollectProcess(StockCollectLogic):
         start_date='2000/01/01'
         self.start_date=datetime.datetime.strptime(start_date,'%Y/%m/%d')
         
-    def revise_time_ch_to_en(self,t):
-        n=re.search(string=t,pattern=r'^(\d+)/').group(1)
-        return re.sub(string=t,pattern=n,repl=str(int(n)+1911))
-
-    def revise_time_en_to_ch(self,t):
-        n=re.search(string=t,pattern=r'^(\d+)/').group(1)
-        return re.sub(string=t,pattern=n,repl=str(int(n)-1911))
+    revise_time_ch_to_en=staticmethod(roc_to_gregorian_text)
+    revise_time_en_to_ch=staticmethod(gregorian_to_roc_text)
     
     def clean_time_format(self,t):
         return re.sub(string=t,pattern='/',repl='')
@@ -179,10 +175,7 @@ class StockTreasuryHistoryInfoCollectProcess(StockCollectLogic):
                                                                    self.engine,index=0,if_exists='append')
         
         #Discord notify
-        token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-        token=token.loc['新聞即時通','token']
-        notify=DiscordNotify()
-        notify.webhook_url=token
+        notify=discord_notifier('新聞即時通', discord_token_path)
         
         temp_info=pd.merge(left=temp_info,right=self.notify_result,
                            on=['公司名稱','證券代號'],how='left')
@@ -210,26 +203,8 @@ class StockTreasuryHistoryInfoCollectProcess(StockCollectLogic):
         if len(self.delete_df)>0:
             self.delete_df=self.delete_df[~self.delete_df.duplicated(subset=['證券代號','預定買回期間起'])]
             
-            self.cursor.execute(f'truncate table {self.delete_table_name}_diff')
-            self.conn.commit()
-            self.delete_df.loc[:,['證券代號','預定買回期間起']].to_sql(
-                self.delete_table_name+'_diff',self.engine,index=0,if_exists='append'
-            )
-
-            #step1 delete already exist data
-            delete_sql=f"""
-            delete tb from {self.delete_table_name} as tb
-            where exists (
-            select *
-            from {self.delete_table_name}_diff tb2
-            where tb.證券代號=tb2.證券代號 and tb.預定買回期間起=tb2.預定買回期間起
-            )
-            """
-            self.cursor.execute(delete_sql)
-            self.conn.commit()
-            #step2 insert data
-            self.delete_df.drop(['id'],axis=1).to_sql(self.delete_table_name,self.engine,
-                                                      index=0,if_exists='append')   
+            self.replace_by_keys(self.delete_df.drop(['id'],axis=1),self.delete_table_name,
+                                 self.delete_table_name+'_diff',['證券代號','預定買回期間起'])
         
         if len(self.history_result)>0:
             self.cursor.execute(f'truncate table {self.table_name}')

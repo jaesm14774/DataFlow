@@ -2,7 +2,7 @@ import pandas as pd
 import datetime
 
 from lib.get_sql import *
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 from common.config import *
 
 from airflow import DAG
@@ -19,20 +19,14 @@ default_args = {
     }
 
 #Discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式執行狀態','token']
-notify=DiscordNotify()
-notify.webhook_url=token
+notify=discord_notifier('程式執行狀態')
 
 #連接mysql
 database_name='logs'
 conn=cursor=engine=None
 
 #discord notify for bug
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式bug權杖','token']
-notify_bug=DiscordNotify()
-notify_bug.webhook_url=token
+notify_bug=discord_notifier('程式bug權杖')
 
 def extract_error_type(s):
     return s.split(',')[0].replace('(','').strip()
@@ -40,11 +34,7 @@ def extract_error_type(s):
 def notification():
     global conn,cursor,engine
     if conn is None or not getattr(conn,'open',False):
-        connection=pd.read_csv(sql_configure_path,index_col='name')
-        conn,cursor,engine=get_sql(connection.loc['host','value'],
-                                   int(connection.loc['port','value']),
-                                   connection.loc['user','value'],
-                                   connection.loc['password','value'],database_name)
+        conn,cursor,engine=get_sql_from_config(database_name)
     bug=pd.read_sql_query('select * from log where notify=0',engine)
 
     if len(bug) == 0:

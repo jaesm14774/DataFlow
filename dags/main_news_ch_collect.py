@@ -2,13 +2,10 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 from news_ch.all_news import *
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 
 #Discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式執行狀態','token']
-notify=DiscordNotify()
-notify.webhook_url=token
+notify=discord_notifier('程式執行狀態')
 
 default_args = {
         'owner': 'jaesm14774',    

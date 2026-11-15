@@ -3,7 +3,6 @@
   "ruleset": "rules_v1",
   "validated_on": "2026-11-14",
   "policy_started_on": "2026-11-15",
-  "report": "docs/signal_validation_report_20261114.md",
   "note": "Seed configuration only. A rule's live status comes from the validated_rule_status table, which the weekly revalidation moves under the hysteresis policy in rule_lifecycle.py; this file is used for seeds and as the fallback when the table is unreachable.",
   "rules": [
     {

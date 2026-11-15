@@ -1,9 +1,10 @@
 import requests
 import datetime
 import pandas as pd
-from lib.get_sql import get_sql
-from lib.notify import DiscordNotify
-from common.config import *
+from lib.get_sql import get_sql_from_config
+from lib.notify import discord_notifier
+from lib.taipei_time import taipei_now
+from sqlalchemy import text
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
@@ -15,10 +16,7 @@ MARKET_ONLY_CLOSURES=[
 ]
 
 #Discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式bug權杖','token']
-notify=DiscordNotify()
-notify.webhook_url=token
+notify=discord_notifier('程式bug權杖')
 
 default_args = {
         'owner': 'jaesm14774',    
@@ -42,7 +40,7 @@ def collect_holiday_taiwan():
     #308DCD75-6434-45BC-A95F-584DA4FED251 = 政府行政機關辦公日曆表
     start_page=0
     threshold_N=100
-    now_date=datetime.datetime.now()+datetime.timedelta(hours=8)
+    now_date=taipei_now()
     data=[]
     
     while True:
@@ -64,28 +62,30 @@ def collect_holiday_taiwan():
     result=result[~result.duplicated(subset=['now_date'])].drop(['year'], axis=1)
     
     #get sql
-    connection=pd.read_csv(sql_configure_path,encoding='utf_8_sig',index_col='name')
-    conn,cursor,engine=get_sql(connection.loc['host','value'],connection.loc['port','value'],connection.loc['user','value'],
-                                connection.loc['password','value'],DB_NAME)
+    conn,cursor,engine=get_sql_from_config(DB_NAME)
     
-    cursor.execute('truncate table taiwan')
-    conn.commit()
+    # 清空、重載、補臨時休市放在同一個 transaction：任何一步失敗都會 rollback，不會留下空的行事曆
+    # （用 DELETE 而非 TRUNCATE，因為 TRUNCATE 會 implicit commit）
+    try:
+        with engine.begin() as tx:
+            tx.execute(text('delete from taiwan'))
+            result.to_sql('taiwan',tx,index=0,if_exists='append')
 
-    result.to_sql('taiwan',engine,index=0,if_exists='append')
-
-    # 政府辦公日曆不含「颱風休市」這類臨時休市；重載後要補回，否則會被清掉
-    for closure_date, closure_name, closure_note in MARKET_ONLY_CLOSURES:
-        cursor.execute(
-            'INSERT INTO taiwan (now_date, chinese_name, isholiday, holidayCategory, description) '
-            'VALUES (%s, %s, %s, %s, %s) '
-            'ON DUPLICATE KEY UPDATE chinese_name=VALUES(chinese_name), isholiday=VALUES(isholiday), '
-            'holidayCategory=VALUES(holidayCategory), description=VALUES(description)',
-            (closure_date, closure_name, '是', '市場臨時休市', closure_note),
-        )
-    conn.commit()
-
-    conn.close()
-    engine.dispose()
+            # 政府辦公日曆不含「颱風休市」這類臨時休市；重載後要補回，否則會被清掉
+            for closure_date, closure_name, closure_note in MARKET_ONLY_CLOSURES:
+                tx.execute(
+                    text(
+                        'INSERT INTO taiwan (now_date, chinese_name, isholiday, holidayCategory, description) '
+                        'VALUES (:d, :name, :holiday, :category, :note) '
+                        'ON DUPLICATE KEY UPDATE chinese_name=VALUES(chinese_name), isholiday=VALUES(isholiday), '
+                        'holidayCategory=VALUES(holidayCategory), description=VALUES(description)'
+                    ),
+                    {'d': closure_date, 'name': closure_name, 'holiday': '是',
+                     'category': '市場臨時休市', 'note': closure_note},
+                )
+    finally:
+        conn.close()
+        engine.dispose()
 
 
 with DAG(

@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-import pandas as pd
-
-from common.config import sql_configure_path
-from lib.get_sql import get_sql
+from lib.get_sql import get_sql_from_config
 
 
 def is_taiwan_stock_market_closed(target_date: dt.date | dt.datetime | str) -> bool:
@@ -20,18 +17,9 @@ def is_taiwan_stock_market_closed(target_date: dt.date | dt.datetime | str) -> b
     else:
         market_date = dt.date.fromisoformat(str(target_date)[:10])
 
-    connection = pd.read_csv(
-        sql_configure_path, encoding="utf_8_sig", index_col="name"
-    )
     conn = cursor = engine = None
     try:
-        conn, cursor, engine = get_sql(
-            connection.loc["host", "value"],
-            connection.loc["port", "value"],
-            connection.loc["user", "value"],
-            connection.loc["password", "value"],
-            "holiday",
-        )
+        conn, cursor, engine = get_sql_from_config("holiday")
         cursor.execute(
             "SELECT 1 FROM taiwan WHERE now_date=%s LIMIT 1",
             (market_date.isoformat(),),

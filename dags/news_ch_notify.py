@@ -4,7 +4,7 @@ from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
 from common.config import *
 from lib.get_sql import *
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 
 default_args = {
     'owner':'jaesm14774',
@@ -17,15 +17,9 @@ default_args = {
     'retry_delay':datetime.timedelta(minutes=2),
     'tags':'Chinese news of notification'
 }
-token = pd.read_csv(discord_token_path, encoding='utf_8_sig', index_col='name')
-token = token.loc['程式執行狀態', 'token']
-notify = DiscordNotify()
-notify.webhook_url = token
+notify=discord_notifier('程式執行狀態')
 
-token = pd.read_csv(discord_token_path, encoding='utf_8_sig', index_col='name')
-token = token.loc['新聞即時通', 'token']
-news_ch_notify = DiscordNotify()
-news_ch_notify.webhook_url = token
+news_ch_notify=discord_notifier('新聞即時通')
 
 NOTIFICATION_LOOKUP_INDEX = 'ix_news_notification_source_article'
 
@@ -151,12 +145,7 @@ def _news_notify_with_engine(codes, restricted_conditions, keyword_requirements,
 
 def news_notify(codes=None, restricted_conditions=None, keyword_requirements=None,
                 required_keyword_count=2, must_exist_keyword_list=None):
-    connection = pd.read_csv(sql_configure_path, index_col='name')
-    conn, cursor, engine = get_sql(
-        connection.loc['host', 'value'], int(connection.loc['port', 'value']),
-        connection.loc['user', 'value'], connection.loc['password', 'value'],
-        'news_ch',
-    )
+    conn, cursor, engine = get_sql_from_config('news_ch')
     try:
         _ensure_notification_lookup_index(cursor)
         if codes is None:

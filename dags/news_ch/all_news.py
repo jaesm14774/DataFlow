@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from lib.get_sql import *
 from lib.log_process_execution import BaseLogRecord
+from lib.taipei_time import taipei_now
 from common.config import *
 from lib.common_tool import task_wrapper
 from news_ch.news_crawler import (
@@ -20,13 +21,11 @@ table_name = 'news'
 _date_only_news_sources = frozenset({'ithome'})
 
 #初始化log
-log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                         app_name=app_name)
+log_record=BaseLogRecord(app_name=app_name)
 _default_log_record = log_record
 
 task_dict={
     1: Anue(),
-    # 2: Apple(), #蘋果日報已結束營業
     3: ChinaTimes(),
     4: CNA(),
     5: ETtoday(),
@@ -65,11 +64,7 @@ def _non_blank_news_text(series):
     return series.fillna('').astype(str).str.strip().ne('')
 
 def _new_connection():
-    connection=pd.read_csv(sql_configure_path,index_col='name')
-    return get_sql(connection.loc['host','value'],
-                   int(connection.loc['port','value']),
-                   connection.loc['user','value'],
-                   connection.loc['password','value'],database_name)
+    return get_sql_from_config(database_name)
 
 conn=cursor=engine=None
 
@@ -132,8 +127,6 @@ def collect_article_url(conn=None,cursor=None,engine=None,log_record=None):
         log_record.insert_to_log_record()
         print(f'[中文新聞] 收網址失敗 | {type(e).__name__}: {e}')
         raise e
-
-    # collect_news(conn,cursor,engine,log_record)
 
 
 #解析文章函數匯集
@@ -236,7 +229,7 @@ def collect_news(conn=None,cursor=None,engine=None,log_record=None):
         D_temp.title=D_temp.title.apply(clean_text,special_sign='\"')
         D_temp=D_temp.reset_index(drop=True)
         accepted_counts=_source_row_counts(D_temp)
-        freshness_observed_at=datetime.datetime.now()+datetime.timedelta(hours=8)
+        freshness_observed_at=taipei_now()
         freshness_cutoff=freshness_observed_at-datetime.timedelta(hours=48)
         recorded_times=D_temp['created_at']
         source_keys=D_temp['source'].fillna('未知來源').astype(str).str.strip().str.casefold()
@@ -504,7 +497,7 @@ def delete_and_insert(conn=None,cursor=None,engine=None,log_record=None):
         # `NewsLogic` instances are created at module import, so their original
         # create_time can predate this batch. Stamp the rows at persistence time
         # because market-signal PIT reads use this field as the ingestion cutoff.
-        ingested_at=datetime.datetime.now()+datetime.timedelta(hours=8)
+        ingested_at=taipei_now()
         D_temp['create_time']=ingested_at.strftime('%Y-%m-%d %H:%M:%S')
         D_temp.to_sql('news',engine,index=False,if_exists='append')
         print(

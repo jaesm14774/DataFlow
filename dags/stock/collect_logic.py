@@ -14,10 +14,12 @@ import googlemaps #google api 查詢經緯度
 from stock.config.config import *
 import cv2
 from lib.log_process_execution import BaseLogRecord
+from lib.taipei_time import taipei_now
 from lib.db_connection import MySQLConnection as _BaseMySQLConnection
 import boto3
 from io import StringIO
 from stock import margin_daily
+from stock.parsing import clean_comma as _clean_comma, make_regular_date_format as _make_regular_date_format
 
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"]="python"
@@ -36,7 +38,7 @@ class StockCollectLogic(MySQLConnection):
     """
     now_time=(datetime.datetime.strptime(BACKFILL_DATE, '%Y-%m-%d')
               if BACKFILL_DATE
-              else datetime.datetime.now()+datetime.timedelta(hours=8))
+              else taipei_now())
     union_column_name_dict={
         '日期':'資料日期',
         '有價證券代號':'證券代號',
@@ -93,44 +95,9 @@ class StockCollectLogic(MySQLConnection):
         """
         清除逗號，output_not_string=True 時強制轉數字，無法轉則回傳 np.nan
         """
-        try:
-            txt=str(txt).strip()
-        except Exception:
-            pass
+        return _clean_comma(txt,output_not_string)
 
-        if isinstance(txt,str):
-            txt=txt.replace(',','')
-
-            if output_not_string:
-                try:
-                    return int(txt)
-                except Exception:
-                    try:
-                        return float(txt)
-                    except Exception:
-                        return np.nan
-            else:
-                return txt
-        else:
-            return txt
-
-    def make_regular_date_format(self,dt):
-        """
-        時間處理函數
-        """
-        if isinstance(dt,datetime.datetime):
-            dt=str(dt)
-
-        #判別各情況
-        if len(dt) == 9: #民國轉西元
-            dt=f'{int(dt[:3])+1911}{dt[3:]}'
-        elif len(dt) == 10: #西元年
-            dt=dt
-        else:
-            raise ValueError(f'沒看過的日期格式: {dt}')
-
-        dt=dt.replace('/','-')
-        return dt
+    make_regular_date_format=staticmethod(_make_regular_date_format)
     
     def collect(self):
         """
@@ -667,27 +634,8 @@ class StockThreeMainInvestorCollectProcess(StockCollectLogic):
         delete insert
         """
         if len(self.result)>0:
-            #step1 truncate delete temp table
-            self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-            self.conn.commit()
-            
-            self.result.loc[:,self._select_columns].to_sql(self._diff_table_name,self.engine,
-                                                           index=0,if_exists='append')
-            
-            #step2 delete already exist data
-            delete_sql=f"""
-            delete tb from {self.table_name} as tb
-            where exists (
-            select *
-            from {self._diff_table_name} tb2
-            where tb.證券代號=tb2.證券代號 and tb.資料日期=tb2.資料日期
-            )
-            """
-            self.delete_count=self.cursor.execute(delete_sql)
-            self.conn.commit()
-            #step3 insert data
-            self.result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-            self.insert_count=len(self.result)
+            self.delete_count,self.insert_count=self.replace_by_keys(self.result,self.table_name,self._diff_table_name,
+                ['證券代號','資料日期'],self._select_columns)
 
 
 class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
@@ -844,30 +792,8 @@ class StockAllCodeDailyDealInfoCollectProcess(StockCollectLogic):
         if len(self.result)>0:
             result=pd.concat(self.result).reset_index(drop=True)
             result=result.replace('--',np.nan)
-            result.loc[:,self._select_columns].to_sql(
-                self._diff_table_name,
-                self.engine,
-                index=False,
-                if_exists='append',
-            )
-            #delete already exist data in 個股成交資訊
-            delete_sql=f"""
-            delete tb from {self.table_name} as tb
-            where exists (
-            select *
-            from {self._diff_table_name} tb2
-            where tb.證券代號=tb2.證券代號 and tb.資料日期=tb2.資料日期
-            )
-            """
-            self.delete_count=self.cursor.execute(delete_sql)
-            self.conn.commit()
-            #insert data
-            result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-            
-            self.insert_count=len(result)
-            #truncate delete temp table
-            self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-            self.conn.commit()
+            self.delete_count,self.insert_count=self.replace_by_keys(result,self.table_name,self._diff_table_name,
+                ['證券代號','資料日期'],self._select_columns)
 
 
 class StockBrokerInOutTPEXTriggerInsertProcess(StockCollectLogic):
@@ -888,25 +814,8 @@ class StockBrokerInOutTPEXTriggerInsertProcess(StockCollectLogic):
             'trigger_bool':1
         },index=[0])
         
-        #truncate delete temp table
-        self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-        self.conn.commit()
-        
-        result.loc[:,['市場別']].to_sql(self._diff_table_name,self.engine,index=0,if_exists='append')
-        #delete already exist data
-        delete_sql=f"""
-        delete tb from {self.table_name} as tb
-        where exists (
-        select *
-        from {self._diff_table_name} tb2
-        where tb.市場別=tb2.市場別 and tb.資料日期=tb2.資料日期
-        )
-        """
-        self.delete_count=self.cursor.execute(delete_sql)
-        self.conn.commit()
-        #insert data
-        result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-        self.insert_count=len(result)
+        self.delete_count,self.insert_count=self.replace_by_keys(result,self.table_name,self._diff_table_name,
+            ['市場別','資料日期'],['市場別'])
 
 
 class StockAllCodeStandardMetricCollectProcess(StockCollectLogic):
@@ -965,27 +874,8 @@ class StockAllCodeStandardMetricCollectProcess(StockCollectLogic):
         self.result=D
     
     def save(self):
-        #step1 truncate delete temp table
-        self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-        self.conn.commit()
-        self.result.loc[:,self._select_columns].to_sql(self._diff_table_name,
-                                                       self.engine,
-                                                       if_exists='append',index=0)
-        
-        #step1 delete already exist data
-        delete_sql=f"""
-        delete tb from {self.table_name} as tb
-        where exists (
-        select *
-        from {self._diff_table_name} tb2
-        where tb.證券代號=tb2.證券代號 and tb.資料日期=tb2.資料日期
-        )
-        """
-        self.delete_count=self.cursor.execute(delete_sql)
-        self.conn.commit()
-        #step2 insert data
-        self.result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-        self.insert_count=len(self.result)
+        self.delete_count,self.insert_count=self.replace_by_keys(self.result,self.table_name,self._diff_table_name,
+            ['證券代號','資料日期'],self._select_columns)
 
 
 class StockDayTradeCollectProcess(StockCollectLogic):
@@ -1044,27 +934,8 @@ class StockDayTradeCollectProcess(StockCollectLogic):
     
     def save(self):
         if len(self.result)>0:
-            #step1 truncate delete temp table
-            self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-            self.conn.commit()
-            self.result.loc[:,self._select_columns].to_sql(self._diff_table_name,
-                                                        self.engine,
-                                                        if_exists='append',index=0)
-            
-            #step1 delete already exist data
-            delete_sql=f"""
-            delete tb from {self.table_name} as tb
-            where exists (
-            select *
-            from {self._diff_table_name} tb2
-            where tb.證券代號=tb2.證券代號 and tb.資料日期=tb2.資料日期
-            )
-            """
-            self.delete_count=self.cursor.execute(delete_sql)
-            self.conn.commit()
-            #step2 insert data
-            self.result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-            self.insert_count=len(self.result)
+            self.delete_count,self.insert_count=self.replace_by_keys(self.result,self.table_name,self._diff_table_name,
+                ['證券代號','資料日期'],self._select_columns)
             
     def process(self):
         """
@@ -1352,26 +1223,8 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
             result=result.sort_values(['證券代號','買賣超'])
 
             super().__init__() #connection 會timeout，很奇怪，明明時間設定都有超過
-            #step1 truncate delete temp table
-            self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-            self.conn.commit()
-            
-            result.loc[:,self._select_columns].to_sql(self._diff_table_name,self.engine,
-                                                      if_exists='append',index=0)
-            #step2 delete already exist data in 券商進出總表
-            delete_sql=f"""
-            delete tb from {self.table_name} as tb
-            where exists (
-            select *
-            from {self._diff_table_name} tb2
-            where tb.證券代號=tb2.證券代號 and tb.資料日期=tb2.資料日期 and tb.券商名稱=tb2.券商名稱
-            )
-            """
-            self.delete_count=self.cursor.execute(delete_sql)
-            self.conn.commit()
-            #step3 insert data
-            result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-            self.insert_count=len(result)
+            self.delete_count,self.insert_count=self.replace_by_keys(result,self.table_name,self._diff_table_name,
+                ['證券代號','資料日期','券商名稱'],self._select_columns)
 
 
 class StockMajorHolderCollectProcess(StockCollectLogic):
@@ -1683,27 +1536,8 @@ class StockMajorHolderCollectProcess(StockCollectLogic):
         if len(self.result)>0:
             self.result=pd.concat(self.result)
             
-            #truncate delete temp table
-            self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-            self.conn.commit()
-            self.result.loc[:,self._select_columns].to_sql(self._diff_table_name,
-                                                        self.engine,
-                                                        if_exists='append',index=0)
-            
-            #delete already exist data
-            delete_sql=f"""
-            delete tb from {self.table_name} as tb
-            where exists (
-            select *
-            from {self._diff_table_name} tb2
-            where tb.證券代號=tb2.證券代號 and tb.資料日期=tb2.資料日期
-            )
-            """
-            self.delete_count=self.cursor.execute(delete_sql)
-            self.conn.commit()
-            #insert data
-            self.result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-            self.insert_count=len(self.result)
+            self.delete_count,self.insert_count=self.replace_by_keys(self.result,self.table_name,self._diff_table_name,
+                ['證券代號','資料日期'],self._select_columns)
         
             
 class StockMarginTradeCollectProcess(StockCollectLogic):
@@ -1834,27 +1668,8 @@ class StockMarginTradeCollectProcess(StockCollectLogic):
         if len(self.result)>0:
             self.result=pd.concat(self.result)
             super().__init__()
-            #truncate delete temp table
-            self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-            self.conn.commit()
-            self.result.loc[:,self._select_columns].to_sql(self._diff_table_name,
-                                                        self.engine,
-                                                        if_exists='append',index=0)
-            
-            #delete already exist data
-            delete_sql=f"""
-            delete tb from {self.table_name} as tb
-            where exists (
-            select *
-            from {self._diff_table_name} tb2
-            where tb.證券代號=tb2.證券代號 and tb.資料日期=tb2.資料日期
-            )
-            """
-            self.delete_count=self.cursor.execute(delete_sql)
-            self.conn.commit()
-            #insert data
-            self.result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-            self.insert_count=len(self.result)
+            self.delete_count,self.insert_count=self.replace_by_keys(self.result,self.table_name,self._diff_table_name,
+                ['證券代號','資料日期'],self._select_columns)
 
 
 class StockMarginTradeDailyProcess(StockMarginTradeCollectProcess):
@@ -2039,24 +1854,5 @@ class StockMonthRevenueCollectProcess(StockCollectLogic):
             
             super().__init__()
             
-            #truncate delete temp table
-            self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-            self.conn.commit()
-            self.result.loc[:,self._select_columns].to_sql(self._diff_table_name,
-                                                        self.engine,
-                                                        if_exists='append',index=0)
-            
-            #delete already exist data
-            delete_sql=f"""
-            delete tb from {self.table_name} as tb
-            where exists (
-            select *
-            from {self._diff_table_name} tb2
-            where tb.證券代號=tb2.證券代號 and tb.資料日期=tb2.資料日期
-            )
-            """
-            self.delete_count=self.cursor.execute(delete_sql)
-            self.conn.commit()
-            #insert data
-            self.result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-            self.insert_count=len(self.result)
+            self.delete_count,self.insert_count=self.replace_by_keys(self.result,self.table_name,self._diff_table_name,
+                ['證券代號','資料日期'],self._select_columns)

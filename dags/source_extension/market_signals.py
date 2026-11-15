@@ -13,15 +13,14 @@ from bisect import bisect_left, bisect_right
 from typing import Any
 from urllib.parse import urlsplit
 
-import pandas as pd
 import pendulum
 from airflow.operators.python import get_current_context
-from common.config import discord_token_path, sql_configure_path
-from lib.get_sql import get_sql
-from lib.notify import DiscordNotify
+from lib.get_sql import get_sql_from_config
+from lib.notify import DiscordNotify, discord_notifier
 from lib.taiwan_market_calendar import is_taiwan_stock_market_closed
 
 from source_extension.adapters import parse_number
+from source_extension.coerce import finite_float as _number
 from source_extension.backtest_diagnostics import summarize_daily_backtest
 from source_extension.equity_order_flow import load_equity_order_flow
 from source_extension import (
@@ -56,7 +55,7 @@ from source_extension.signal_policy import (
 NOTIFICATION_CHANNEL = "新聞即時通"
 MAX_INTRADAY_CANDIDATES_PER_RUN = 60
 DAILY_DIGEST_LIMIT = 10
-# Push policy (see docs/signal_validation_report_20261114.md): only signals that
+# Push policy: only signals that
 # passed out-of-sample validation reach Discord. Flip either flag to restore the
 # legacy behaviour (everything is still recorded in the ledger either way).
 VALIDATED_DIGEST_MODE = True
@@ -347,14 +346,6 @@ def _revision_title_key(value: Any) -> tuple[bool, str]:
     return bool(match), title[match.end():] if match else title
 
 
-def _number(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
 def _quarterly_operating_margin_series(
     rows: list[tuple[dt.date, Any, float | None, Any, int]],
 ) -> dict[tuple[int, int], float]:
@@ -616,14 +607,7 @@ def _load_material_convertible_bond_cash_context(
 
 
 def _open_stock_connection():
-    connection = pd.read_csv(sql_configure_path, index_col="name")
-    return get_sql(
-        connection.loc["host", "value"],
-        int(connection.loc["port", "value"]),
-        connection.loc["user", "value"],
-        connection.loc["password", "value"],
-        "stock",
-    )
+    return get_sql_from_config("stock")
 
 
 def _load_research_news_polarity(
@@ -664,14 +648,7 @@ def _load_research_news_polarity(
 
 
 def _open_news_connection():
-    connection = pd.read_csv(sql_configure_path, index_col="name")
-    return get_sql(
-        connection.loc["host", "value"],
-        int(connection.loc["port", "value"]),
-        connection.loc["user", "value"],
-        connection.loc["password", "value"],
-        "news_ch",
-    )
+    return get_sql_from_config("news_ch")
 
 
 def _upsert_run(cursor, *, run_key: str, source_dag_run_id: str | None,
@@ -5440,10 +5417,7 @@ def capture_market_signal_snapshot() -> dict[str, Any]:
 
 
 def _discord_notifier() -> DiscordNotify:
-    token = pd.read_csv(discord_token_path, encoding="utf_8_sig", index_col="name")
-    notifier = DiscordNotify()
-    notifier.webhook_url = token.loc[NOTIFICATION_CHANNEL, "token"]
-    return notifier
+    return discord_notifier(NOTIFICATION_CHANNEL)
 
 
 def _sanitize(value: Any, limit: int = 180) -> str:

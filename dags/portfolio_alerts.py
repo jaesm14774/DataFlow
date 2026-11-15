@@ -12,10 +12,7 @@ import datetime as dt
 import json
 from typing import Any
 
-import pandas as pd
-
-from common.config import discord_token_path
-from lib.notify import DiscordNotify
+from lib.notify import DiscordNotify, discord_notifier
 from source_extension.registry import SOURCE_DEFINITIONS, _open_connection
 from source_extension.schema import create_portfolio_schema
 
@@ -385,10 +382,7 @@ def find_alerts(cursor, holdings: dict[str, str], rules: dict[str, dict[str, Any
 
 
 def _discord_notifier() -> DiscordNotify:
-    token = pd.read_csv(discord_token_path, encoding="utf_8_sig", index_col="name")
-    notifier = DiscordNotify()
-    notifier.webhook_url = token.loc[NOTIFICATION_CHANNEL, "token"]
-    return notifier
+    return discord_notifier(NOTIFICATION_CHANNEL)
 
 
 def _get_state(cursor, state_key: str) -> str | None:

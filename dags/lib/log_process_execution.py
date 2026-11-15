@@ -1,10 +1,5 @@
-import datetime
-import pandas as pd
-from lib.get_sql import *
-from common.config import *
-
-#read config
-connection=pd.read_csv(sql_configure_path,index_col='name')
+from lib.get_sql import get_sql_from_config
+from lib.taipei_time import taipei_now
 
 
 class BaseLogRecord(object):
@@ -36,11 +31,12 @@ class BaseLogRecord(object):
         'insert_count','update_count','delete_count'
     ]
 
-    def __init__(self, app_name, process_date):
+    def __init__(self, app_name, process_date=None):
+        """process_date 未指定時為台灣今日('%Y-%m-%d')；回補日期等情況才需明確傳入。"""
         self.app_name = app_name
-        self.process_date = process_date
+        self.process_date = process_date or taipei_now().strftime('%Y-%m-%d')
         self.success = 0
-        self.process_start_time = (datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
+        self.process_start_time = taipei_now().strftime('%Y-%m-%d %H:%M:%S')
         self.error_message = ''
         self.before_count = 0
         self.after_count = 0
@@ -122,7 +118,7 @@ class BaseLogRecord(object):
             self.success,
             self.process_date,
             self.process_start_time,
-            (datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
+            taipei_now().strftime('%Y-%m-%d %H:%M:%S'),
             self.error_message,
             self.before_count,
             self.after_count,
@@ -136,11 +132,7 @@ class BaseLogRecord(object):
         insert_to_log_record [
             將物件資料新增到db table中]
         """
-        conn,cursor,engine=get_sql(connection.loc['host','value'],
-                                   int(connection.loc['port','value']),
-                                   connection.loc['user','value'],
-                                   connection.loc['password','value'],
-                                   self.PROCESS_LOG_DATABASE)
+        conn,cursor,engine=get_sql_from_config(self.PROCESS_LOG_DATABASE)
         
         cursor.execute(self.get_insert_sql(), [str(v) if isinstance(v,str) else int(v) for v in self.get_insert_data()])
         conn.commit()

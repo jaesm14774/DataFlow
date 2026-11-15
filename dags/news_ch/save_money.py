@@ -1,9 +1,8 @@
-import datetime
 import pandas as pd
 
 from lib.get_sql import *
 from lib.log_process_execution import BaseLogRecord
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 from common.config import *
 
 from news_ch.news_crawler import CP, InfoTalk, TVBS_SaveMoney
@@ -13,8 +12,7 @@ database_name = 'news_ch'
 table_name = 'save_money'
 
 #初始化log
-log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                         app_name=app_name)
+log_record=BaseLogRecord(app_name=app_name)
 _default_log_record = log_record
 
 task_dict={
@@ -32,11 +30,7 @@ conn=cursor=engine=None
 def _ensure_runtime(count_before=False,record=None):
     global conn,cursor,engine
     if conn is None or not getattr(conn,'open',False):
-        connection=pd.read_csv(sql_configure_path,index_col='name')
-        conn,cursor,engine=get_sql(connection.loc['host','value'],
-                                   int(connection.loc['port','value']),
-                                   connection.loc['user','value'],
-                                   connection.loc['password','value'],database_name)
+        conn,cursor,engine=get_sql_from_config(database_name)
     if count_before:
         before_count=pd.read_sql_query(
             f'select count(1) as N from {table_name}',engine
@@ -47,10 +41,7 @@ def _ensure_runtime(count_before=False,record=None):
 
 
 #news ch notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['好康報','token']
-save_money_ch_notify=DiscordNotify()
-save_money_ch_notify.webhook_url=token
+save_money_ch_notify=discord_notifier('好康報')
 
 def collect_news(conn=None,cursor=None,engine=None,log_record=None):
     conn,cursor,engine=_ensure_runtime()

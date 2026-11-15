@@ -14,8 +14,8 @@ from typing import Any
 
 import pandas as pd
 
-from . import rule_detection, rule_lifecycle, signal_rules, validated_signals
-from .schema import SCHEMA_STATEMENTS, create_schema
+from source_extension import rule_detection, rule_lifecycle, signal_rules, validated_signals
+from source_extension.schema import SCHEMA_STATEMENTS, create_schema
 
 LOGGER = logging.getLogger(__name__)
 
@@ -327,8 +327,8 @@ def run_weekly_revalidation(today: dt.date | None = None, dag_run=None) -> dict[
 
     rebuild = bool(((getattr(dag_run, "conf", None) or {}).get("rebuild")))
 
-    from . import market_signals
-    from .registry import _open_connection
+    from source_extension import market_signals
+    from source_extension.registry import _open_connection
 
     today = today or dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date()
     now = dt.datetime.now()

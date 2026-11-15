@@ -1,13 +1,11 @@
-import requests
 import pandas as pd
-import datetime
 import re
 import time
 from bs4 import BeautifulSoup
-from common.config import credential_path, sql_configure_path, discord_token_path, chrome_driver_path
+from common.config import credential_path, chrome_driver_path
 from lib.google import google_search
-from lib.get_sql import get_sql
-from lib.notify import DiscordNotify
+from lib.get_sql import get_sql_from_config
+from lib.notify import discord_notifier
 from lib.log_process_execution import BaseLogRecord
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -49,41 +47,6 @@ def parse_search_results(**kwargs):
     )
     url = url or GOOGLE_PLAY_PRE_REG_URL
     kwargs['ti'].xcom_push(key='pre_registration_url', value=url)
-
-# def fetch_game_details(**kwargs):
-    # url = kwargs['ti'].xcom_pull(key='pre_registration_url', task_ids='parse_search_results')
-    # headers = {
-        # 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        # 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        # 'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-        # 'Accept-Encoding': 'gzip, deflate, br',
-        # 'Connection': 'keep-alive',
-        # 'Upgrade-Insecure-Requests': '1'
-    # }
-# 
-    # domain_url = 'https://play.google.com'
-    # try:
-        # response = requests.get(url, headers=headers, timeout=20)
-        # response.raise_for_status()
-        # soup = BeautifulSoup(response.text, 'lxml')
-        # games = []
-        # for part in soup.find_all('div', {'role': 'listitem'}):
-            # title = part.find('img').get('alt', '').replace('Icon image ', '').strip()
-            # game_url = domain_url + part.find('a').get('href', '').strip()
-            # img = part.find('img').get('srcset', '').strip()
-            # game_id = game_url.split('id=')[-1] if 'id=' in game_url else ''
-            # if title and game_url and img and game_id:
-                # games.append({
-                    # 'title': title,
-                    # 'game_url': game_url,
-                    # 'img': img,
-                    # 'game_id': game_id,
-                    # 'source': 'google_play'
-                # })
-    # except Exception as e:
-        # log_record.error_message(f'預約註冊遊戲，取得遊戲資料失敗 : {e}')
-        # raise e
-    # kwargs['ti'].xcom_push(key='game_details', value=games)
 
 def fetch_google_play_pre_registration(**kwargs):
     url = kwargs['ti'].xcom_pull(key='pre_registration_url', task_ids='parse_search_results') or GOOGLE_PLAY_PRE_REG_URL
@@ -223,8 +186,7 @@ def fetch_qooapp_pre_registration():
     return games
 
 def fetch_game_details(**kwargs):
-    log_record = BaseLogRecord(process_date=(datetime.datetime.now() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                               app_name=app_name)
+    log_record = BaseLogRecord(app_name=app_name)
     
     all_games = []
     
@@ -256,14 +218,9 @@ def write_to_sql(**kwargs):
     games = kwargs['ti'].xcom_pull(key='game_details', task_ids='fetch_game_details')
     df = pd.DataFrame(games)
     
-    connection = pd.read_csv(sql_configure_path, index_col='name')
-    conn, cursor, engine = get_sql(connection.loc['host', 'value'],
-                                   int(connection.loc['port', 'value']),
-                                   connection.loc['user', 'value'],
-                                   connection.loc['password', 'value'], database_name)
-    
-    log_record = BaseLogRecord(process_date=(datetime.datetime.now() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                               app_name=app_name)
+    conn, cursor, engine = get_sql_from_config(database_name)
+
+    log_record = BaseLogRecord(app_name=app_name)
     
     new_df = pd.DataFrame()
     before_count = 0
@@ -309,16 +266,9 @@ def write_to_sql(**kwargs):
         kwargs['ti'].xcom_push(key='pre_registration_count', value=len(new_df))
 
 def notify_new_games(**kwargs):
-    connection = pd.read_csv(sql_configure_path, index_col='name')
-    conn, cursor, engine = get_sql(connection.loc['host', 'value'],
-                                   int(connection.loc['port', 'value']),
-                                   connection.loc['user', 'value'],
-                                   connection.loc['password', 'value'], database_name)
+    conn, cursor, engine = get_sql_from_config(database_name)
     
-    token = pd.read_csv(discord_token_path, encoding='utf_8_sig', index_col='name')
-    token = token.loc['遊戲', 'token']
-    notify = DiscordNotify()
-    notify.webhook_url = token
+    notify=discord_notifier('遊戲')
     
     try:
         try:

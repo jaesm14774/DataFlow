@@ -1,5 +1,6 @@
 from stock.collect_logic import *
-from lib.notify import DiscordNotify
+from stock.parsing import roc_to_gregorian_text, gregorian_to_roc_text
+from lib.notify import discord_notifier
 from dateutil.relativedelta import relativedelta
 from io import StringIO
 
@@ -13,13 +14,8 @@ class StockEarningCallCollectProcess(StockCollectLogic):
     app_name='stock_earning_call'
     domain_url='https://mopsov.twse.com.tw/nas/STR/'
 
-    def revise_time_ch_to_en(self,t):
-        n=re.search(string=t,pattern=r'^(\d+)/').group(1)
-        return re.sub(string=t,pattern=n,repl=str(int(n)+1911))
-
-    def revise_time_en_to_ch(self,t):
-        n=re.search(string=t,pattern=r'^(\d+)/').group(1)
-        return re.sub(string=t,pattern=n,repl=str(int(n)-1911))
+    revise_time_ch_to_en=staticmethod(roc_to_gregorian_text)
+    revise_time_en_to_ch=staticmethod(gregorian_to_roc_text)
 
     def extract_correct_time_format(self,t):
         if '至' in t:
@@ -108,28 +104,8 @@ class StockEarningCallCollectProcess(StockCollectLogic):
         
     def save(self):
         if len(self.result)>0:
-            #step1 truncate delete temp table
-            self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-            self.conn.commit()
-            
-            self.result.loc[:,self._select_columns].to_sql(self._diff_table_name,self.engine,
-                                                            index=0,if_exists='append')
-            
-            #step2 delete already exist data
-            delete_sql=f"""
-            delete tb from {self.table_name} as tb
-            where exists (
-            select *
-            from {self._diff_table_name} tb2
-            where tb.證券代號=tb2.證券代號 and tb.資料日期=tb2.資料日期
-            )
-            """
-            self.delete_count=self.cursor.execute(delete_sql)
-            self.conn.commit()
-            
-            self.result.to_sql(self.table_name,self.engine,index=0,
-                               if_exists='append')
-            self.insert_count=len(self.result)
+            self.delete_count,self.insert_count=self.replace_by_keys(self.result,self.table_name,self._diff_table_name,
+                ['證券代號','資料日期'],self._select_columns)
             
     def notification(self):
         df=self.result
@@ -145,28 +121,12 @@ class StockEarningCallCollectProcess(StockCollectLogic):
             return('法說會順利執行')
         
         df=df.reset_index(drop=True)
-        # #下載新的法說檔案
-        # for ii in range(0,df.shape[0]):
-        #     date=df.資料日期.iloc[ii]
-        #     name=df.證券名稱.iloc[ii].replace('*','')
-        #     file_url=df.file_url.iloc[ii]
-        #     file_type=re.search(string=file_url,pattern=r'\..{1,5}$').group(0).replace('.','')
-            
-        #     a=self.simulate_request(event={'url':file_url,'headers':self.headers,'method':'get'})
-        #     try:
-        #         with open(earning_call_path+'file/'+date.replace('-','')+name+f'.{file_type}','wb') as f:
-        #             f.write(base64.b64decode(a['content'].encode()))
-        #     except:
-        #         continue    
         #新增已通知紀錄
         df.loc[:,self._select_columns].to_sql(self.history_notify_table_name,self.engine,index=0,
                                          if_exists='append')
         
         #Discord notify
-        token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-        token=token.loc['新聞即時通','token']
-        notify=DiscordNotify()
-        notify.webhook_url=token
+        notify=discord_notifier('新聞即時通', discord_token_path)
         
         for i in range(0,df.shape[0]):
             #法說會

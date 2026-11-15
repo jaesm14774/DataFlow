@@ -4,6 +4,7 @@ import json
 import pytest
 import requests
 
+from http_fixture import make_response
 from source_extension.adapters import (
     _normalize_market_record,
     _resolve_record_key_collisions,
@@ -143,14 +144,9 @@ def test_taifex_large_trader_official_csv_variant_is_normalized(monkeypatch):
         "前十大交易人賣方數量,全市場未沖銷部位數\n"
         "20261012,TX,臺股期貨,202610,自營商,10,11,20,21,100\n"
     ).encode("utf-8")
-    response = requests.Response()
-    response.status_code = 200
-    response.headers["Content-Type"] = "application/octet-stream"
-    response.headers["Content-Length"] = str(len(body))
     # The natural failed run returned the approved TAIFEX endpoint as
     # application/octet-stream without a usable filename header.
-    response._content = body
-    response._content_consumed = True
+    response = make_response(body, content_type="application/octet-stream")
     request = {}
 
     def fake_get(url, **kwargs):
@@ -206,12 +202,7 @@ def test_taifex_large_trader_official_json_variant_is_normalized(
         "Top10Sell": "21",
         "OIOfMarket": "100",
     }]).encode("utf-8")
-    response = requests.Response()
-    response.status_code = 200
-    response.headers["Content-Type"] = content_type
-    response.headers["Content-Length"] = str(len(body))
-    response._content = body
-    response._content_consumed = True
+    response = make_response(body, content_type=content_type)
     request = {}
 
     def fake_get(url, **kwargs):
@@ -236,12 +227,7 @@ def test_taifex_large_trader_json_requires_official_fields(monkeypatch):
         if item["source_key"] == "taifex_futures_large_trader_positions_daily"
     )
     body = b'[{"Date":"20261012","Contract":"TX"}]'
-    response = requests.Response()
-    response.status_code = 200
-    response.headers["Content-Type"] = "application/json"
-    response.headers["Content-Length"] = str(len(body))
-    response._content = body
-    response._content_consumed = True
+    response = make_response(body, content_type="application/json")
     monkeypatch.setattr(adapters.requests, "get", lambda *args, **kwargs: response)
 
     with pytest.raises(ValueError, match="fields do not match") as caught:
@@ -269,13 +255,8 @@ def test_taifex_octet_stream_requires_expected_csv_contract(monkeypatch, filenam
         item for item in SOURCE_DEFINITIONS
         if item["source_key"] == "taifex_futures_large_trader_positions_daily"
     )
-    response = requests.Response()
-    response.status_code = 200
-    response.headers["Content-Type"] = "application/octet-stream"
-    response.headers["Content-Length"] = str(len(body))
+    response = make_response(body, content_type="application/octet-stream")
     response.headers["Content-Disposition"] = f"attachment; filename={filename}"
-    response._content = body
-    response._content_consumed = True
     monkeypatch.setattr(adapters.requests, "get", lambda *args, **kwargs: response)
 
     with pytest.raises(ValueError) as caught:
@@ -301,12 +282,7 @@ def test_taifex_index_options_official_csv_is_normalized(monkeypatch):
         "20261030,臺指選擇權,CALL,自營商,10,100,20,200,-10,-100,"
         "30,300,20,200,10,100\n"
     ).encode("utf-8")
-    response = requests.Response()
-    response.status_code = 200
-    response.headers["Content-Type"] = "application/octet-stream"
-    response.headers["Content-Length"] = str(len(body))
-    response._content = body
-    response._content_consumed = True
+    response = make_response(body, content_type="application/octet-stream")
     monkeypatch.setattr(adapters.requests, "get", lambda *args, **kwargs: response)
 
     records, status = adapters.fetch_and_normalize(source)
@@ -340,12 +316,7 @@ def test_taifex_index_options_rejects_csv_header_drift(monkeypatch):
         if item["source_key"] == "taifex_index_options_positions_daily"
     )
     body = b"wrong,header\nvalue,value\n"
-    response = requests.Response()
-    response.status_code = 200
-    response.headers["Content-Type"] = "application/octet-stream"
-    response.headers["Content-Length"] = str(len(body))
-    response._content = body
-    response._content_consumed = True
+    response = make_response(body, content_type="application/octet-stream")
     monkeypatch.setattr(adapters.requests, "get", lambda *args, **kwargs: response)
 
     with pytest.raises(ValueError, match="header does not match") as caught:
@@ -390,13 +361,7 @@ def test_incomplete_natural_key_does_not_drop_distinct_payloads():
 
 
 def _json_response(body: bytes, content_type: str):
-    response = requests.Response()
-    response.status_code = 200
-    response.headers["Content-Type"] = content_type
-    response.headers["Content-Length"] = str(len(body))
-    response._content = body
-    response._content_consumed = True
-    return response
+    return make_response(body, content_type=content_type)
 
 
 def test_taifex_index_options_json_variant_is_normalized(monkeypatch):

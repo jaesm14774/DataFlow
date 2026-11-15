@@ -9,7 +9,7 @@ from dateutil.relativedelta import *
 
 from lib.get_sql import *
 from lib.log_process_execution import BaseLogRecord
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 from common.config import *
 
 from airflow import DAG
@@ -27,10 +27,7 @@ default_args = {
     }
 
 #Discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式執行狀態','token']
-notify=DiscordNotify()
-notify.webhook_url=token
+notify=discord_notifier('程式執行狀態')
 
 app_name = 'song'
 database_name = 'crawler'
@@ -38,8 +35,7 @@ table_name = 'song'
 
 user_agent=["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36"]
 #初始化log
-log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                         app_name=app_name)
+log_record=BaseLogRecord(app_name=app_name)
 
 #連接mysql
 conn=cursor=engine=None
@@ -47,11 +43,7 @@ conn=cursor=engine=None
 def _ensure_runtime(count_before=False):
     global conn,cursor,engine
     if conn is None or not getattr(conn,'open',False):
-        connection=pd.read_csv(sql_configure_path,index_col='name')
-        conn,cursor,engine=get_sql(connection.loc['host','value'],
-                                   int(connection.loc['port','value']),
-                                   connection.loc['user','value'],
-                                   connection.loc['password','value'],database_name)
+        conn,cursor,engine=get_sql_from_config(database_name)
     if count_before:
         before_count=pd.read_sql_query(
             f'select count(1) as N from {table_name}',engine

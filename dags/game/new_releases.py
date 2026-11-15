@@ -1,11 +1,9 @@
 import pandas as pd
-import datetime
-import requests
 import re
 from bs4 import BeautifulSoup
-from common.config import sql_configure_path, discord_token_path, chrome_driver_path
-from lib.get_sql import get_sql
-from lib.notify import DiscordNotify
+from common.config import chrome_driver_path
+from lib.get_sql import get_sql_from_config
+from lib.notify import discord_notifier
 from lib.log_process_execution import BaseLogRecord
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -252,8 +250,7 @@ def fetch_4gamers_new_releases():
 
 def fetch_new_releases_details(**kwargs):
     app_name = 'game_new_releases'
-    log_record = BaseLogRecord(process_date=(datetime.datetime.now() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                               app_name=app_name)
+    log_record = BaseLogRecord(app_name=app_name)
     
     all_games = []
     
@@ -292,14 +289,9 @@ def write_new_releases_to_sql(**kwargs):
     app_name = 'game_new_releases'
     table_name = 'new_releases'
     
-    connection = pd.read_csv(sql_configure_path, index_col='name')
-    conn, cursor, engine = get_sql(connection.loc['host', 'value'],
-                                   int(connection.loc['port', 'value']),
-                                   connection.loc['user', 'value'],
-                                   connection.loc['password', 'value'], database_name)
-    
-    log_record = BaseLogRecord(process_date=(datetime.datetime.now() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                               app_name=app_name)
+    conn, cursor, engine = get_sql_from_config(database_name)
+
+    log_record = BaseLogRecord(app_name=app_name)
     
     new_df = pd.DataFrame()
     before_count = 0
@@ -342,16 +334,9 @@ def write_new_releases_to_sql(**kwargs):
         kwargs['ti'].xcom_push(key='new_releases_count', value=len(new_df))
 
 def notify_new_releases(**kwargs):
-    connection = pd.read_csv(sql_configure_path, index_col='name')
-    conn, cursor, engine = get_sql(connection.loc['host', 'value'],
-                                   int(connection.loc['port', 'value']),
-                                   connection.loc['user', 'value'],
-                                   connection.loc['password', 'value'], database_name)
+    conn, cursor, engine = get_sql_from_config(database_name)
     
-    token = pd.read_csv(discord_token_path, encoding='utf_8_sig', index_col='name')
-    token = token.loc['遊戲', 'token']
-    notify = DiscordNotify()
-    notify.webhook_url = token
+    notify=discord_notifier('遊戲')
     
     try:
         try:

@@ -1,9 +1,7 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 import datetime
-import pandas as pd
-from common.config import *
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 from credit_cards.money101_crawler import fetch_card_data, write_to_sql, notify_new_card  # 引用主程式中的函數
 
 # DAG 預設參數
@@ -18,10 +16,7 @@ default_args = {
 }
 
 #discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式執行狀態','token']
-notify=DiscordNotify()
-notify.webhook_url=token
+notify=discord_notifier('程式執行狀態')
 
 # 建立 DAG
 with DAG(

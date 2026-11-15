@@ -12,6 +12,8 @@ from bisect import bisect_left
 from collections import defaultdict
 from typing import Any, Iterable
 
+from source_extension.coerce import finite_float as _to_float
+
 
 FOLLOWUP_HORIZONS = ("1w", "1m", "3m", "6m", "1y")
 HORIZON_BLOCK_LENGTHS = {"1w": 5, "1m": 21, "3m": 63, "6m": 126, "1y": 252}
@@ -237,14 +239,6 @@ def _consume(bucket: dict[str, Any], row: dict[str, Any], direction: int) -> Non
         adverse = min(direction * high_excursion, direction * low_excursion)
         bucket["favorable_excursions"].append(favorable)
         bucket["adverse_excursions"].append(adverse)
-
-
-def _to_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _mean(values: list[float]) -> float | None:

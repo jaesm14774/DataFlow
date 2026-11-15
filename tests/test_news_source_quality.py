@@ -249,6 +249,7 @@ def test_batch_rejections_reconcile_and_staging_is_clean(monkeypatch):
     monkeypatch.setattr(pd,'read_sql_query',lambda *args,**kwargs:urls.copy())
     monkeypatch.setattr(pd.DataFrame,'to_sql',lambda self,name,*args,**kwargs:staged.update({name:self.copy()}))
     namespace={'pd':pd,'datetime':dt,'validate_article':validate_article,'get_info':get_info,
+               'taipei_now':lambda:dt.datetime.now()+dt.timedelta(hours=8),
                '_ensure_runtime':lambda:(connection,cursor,engine),'_default_log_record':record,
                '_date_only_news_sources':frozenset(),'task_dict':{1:Mock(_source='測試')},
                'clean_time_format':lambda value:published_time(value),'clean_text':lambda value,**kwargs:value}

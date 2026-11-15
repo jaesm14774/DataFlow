@@ -1,6 +1,5 @@
 from news_ch.news_crawler.thenewslens import TheNewsLens
 from news_ch.news_crawler.anue import Anue
-from news_ch.news_crawler.apple import Apple
 from news_ch.news_crawler.newtalk import NewTalk
 from news_ch.news_crawler.setn import SETN
 from news_ch.news_crawler.pts import PTS

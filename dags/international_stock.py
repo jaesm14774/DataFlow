@@ -1,7 +1,7 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 from stock.collect_logic import *
 
 default_args = {
@@ -18,10 +18,7 @@ default_args = {
     }
 
 #Discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式執行狀態','token']
-notify=DiscordNotify()
-notify.webhook_url=token
+notify=discord_notifier('程式執行狀態', discord_token_path)
 
 
 class StockInternationalCollectProcess(StockCollectLogic):
@@ -126,28 +123,11 @@ class StockInternationalCollectProcess(StockCollectLogic):
         """
         儲存資料進資料庫(或其他)
         """
-        self.cursor.execute(f'truncate table {self._diff_table_name}')
-        self.conn.commit()
-        self.data.loc[:,self._select_columns].to_sql(self._diff_table_name,self.engine,index=0,if_exists='append')
-        delete_sql=f"""
-        delete tb from {self.table_name} as tb
-        where exists (
-        select *
-        from {self._diff_table_name} tb2
-        where tb.stock_name=tb2.stock_name and tb.create_date=tb2.create_date
-        )
-        """
-        self.delete_count=self.cursor.execute(delete_sql)
-        self.conn.commit()
-        
-        self.data.to_sql(self.table_name,self.engine,if_exists='append',index=0)
-        self.insert_count=len(self.data)
+        self.delete_count,self.insert_count=self.replace_by_keys(self.data,self.table_name,self._diff_table_name,
+            ['stock_name','create_date'],self._select_columns)
         
     def notification(self):
-        token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-        token=token.loc['新聞即時通','token']
-        news_notify=DiscordNotify()
-        news_notify.webhook_url=token
+        news_notify=discord_notifier('新聞即時通', discord_token_path)
         #開始一天一次的通知
         select_sql=f"""
         select * from {self.table_name} as tb

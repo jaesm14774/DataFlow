@@ -1,14 +1,12 @@
-import requests
 import re
 import datetime
 import pandas as pd
 import numpy as np
 import glob
-import random
 
 from lib.get_sql import *
 from lib.log_process_execution import BaseLogRecord
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 from common.config import *
 
 from airflow import DAG
@@ -27,30 +25,17 @@ default_args = {
 
 image_path='/opt/airflow/plugins/figurine_notify/image/'
 #Discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式執行狀態','token']
-notify=DiscordNotify()
-notify.webhook_url=token
+notify=discord_notifier('程式執行狀態')
 
 #公仔通知 notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['公仔通知','token']
-figurine_notify=DiscordNotify()
-figurine_notify.webhook_url=token
+figurine_notify=discord_notifier('公仔通知')
 
 app_name = 'figurine'
 database_name = 'crawler'
 table_name = 'figurine_item'
 
 #初始化log
-log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                         app_name=app_name)
-
-user_agent = [
-"Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_6_8; en-us) AppleWebKit/534.50 (KHTML, like Gecko) Version/5.1 Safari/534.50",
-"Mozilla/5.0 (Windows; U; Windows NT 6.1; en-us) AppleWebKit/534.50 (KHTML, like Gecko) Version/5.1 Safari/534.50",
-"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.198 Safari/537.36"
-]
+log_record=BaseLogRecord(app_name=app_name)
 
 #連接mysql
 conn=cursor=engine=None
@@ -58,25 +43,13 @@ conn=cursor=engine=None
 def _ensure_runtime(count_before=False):
     global conn,cursor,engine
     if conn is None or not getattr(conn,'open',False):
-        connection=pd.read_csv(sql_configure_path,index_col='name')
-        conn,cursor,engine=get_sql(connection.loc['host','value'],
-                                   int(connection.loc['port','value']),
-                                   connection.loc['user','value'],
-                                   connection.loc['password','value'],database_name)
+        conn,cursor,engine=get_sql_from_config(database_name)
     if count_before:
         before_count=pd.read_sql_query(
             f'select count(1) as N from {table_name}',engine
         )['N'].iloc[0]
         log_record.set_before_count(before_count)
     return conn,cursor,engine
-
-# session=requests.session()
-# session.headers={'user-agent':random.choice(user_agent),
-#                 'x-api-source': 'pc','x-requested-with': 'XMLHttpRequest',
-#                 'referer': 'https://shopee.tw'
-#                 }
-
-# session.get('https://shopee.tw/', timeout=20)
 
 def get_shopee_product(session,shop_id,n_product=100,sort_type=2):
     """

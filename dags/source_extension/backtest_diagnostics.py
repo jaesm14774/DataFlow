@@ -12,14 +12,7 @@ from typing import Any
 from pymysql.cursors import SSCursor
 
 from source_extension import research_signals as rs
-
-
-def _float(value: Any) -> float | None:
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    return result if math.isfinite(result) else None
+from source_extension.coerce import as_date as _as_date, finite_float as _float
 
 
 def _direction(value: Any) -> int:
@@ -170,16 +163,6 @@ def _finish_group(key: dict[str, Any], group: dict[str, Any]) -> dict[str, Any]:
     elif key.get("family"):
         result["family_state"] = "directional"
     return result
-
-
-def _as_date(value: Any) -> dt.date:
-    """Signal-date keys are dt.date from MySQL but ISO strings elsewhere."""
-
-    if isinstance(value, dt.datetime):
-        return value.date()
-    if isinstance(value, dt.date):
-        return value
-    return dt.date.fromisoformat(str(value)[:10])
 
 
 RESEARCH_MIN_UNIVERSE = 200

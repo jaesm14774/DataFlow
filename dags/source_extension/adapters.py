@@ -878,11 +878,15 @@ def _first_value(record: dict[str, Any], *names: str) -> Any:
     return None
 
 
+# Text a source uses for "no value" in numeric columns (not an invalid number).
+_EMPTY_NUMERIC_TEXT = frozenset({"", "-", "--", "N/A", "NA", "null", "None"})
+
+
 def parse_number(value: Any) -> float | None:
     if value is None:
         return None
     text = str(value).strip().replace(",", "")
-    if text in {"", "-", "--", "N/A", "NA", "null", "None"}:
+    if text in _EMPTY_NUMERIC_TEXT:
         return None
     text = text.replace("%", "")
     try:
@@ -896,7 +900,7 @@ def _invalid_numeric_value(value: Any) -> bool:
     if value is None:
         return False
     text = str(value).strip()
-    if text in {"", "-", "--", "N/A", "NA", "null", "None"}:
+    if text in _EMPTY_NUMERIC_TEXT:
         return False
     return parse_number(value) is None
 

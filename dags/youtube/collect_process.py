@@ -5,7 +5,8 @@ import numpy as np
 import datetime
 import random
 import time
-from lib.get_sql import get_sql
+from lib.db_upsert import replace_by_keys
+from lib.get_sql import get_sql_from_config
 from lib.log_process_execution import BaseLogRecord
 from common.config import *
 
@@ -14,19 +15,14 @@ database_name = 'crawler'
 table_name = 'youtube_video'
 
 #初始化log
-log_record=BaseLogRecord(process_date=(datetime.datetime.now()+datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                         app_name=app_name)
+log_record=BaseLogRecord(app_name=app_name)
 
 conn=cursor=engine=None
 
 def _ensure_runtime():
     global conn,cursor,engine
     if conn is None or not getattr(conn,'open',False):
-        connection=pd.read_csv(sql_configure_path,index_col='name')
-        conn,cursor,engine=get_sql(connection.loc['host','value'],
-                                   int(connection.loc['port','value']),
-                                   connection.loc['user','value'],
-                                   connection.loc['password','value'], database_name)
+        conn,cursor,engine=get_sql_from_config(database_name)
         before_count=pd.read_sql_query(
             f'select count(id) as N from {table_name}',engine
         )['N'].iloc[0]
@@ -535,32 +531,12 @@ class YoutubeCrawler():
         return cc      
 
     def update_table(self, df, table_name, diff_table_name, primary_keys, log_record=False):
-        # Step 1: Truncate and insert data into temp table
-        cursor.execute(f'TRUNCATE TABLE {diff_table_name}')
-        conn.commit()
-
-        df.loc[:,primary_keys].to_sql(diff_table_name, engine, if_exists='append', index=False)
-
-        # Step 2: Delete already existing data
-        primary_key_conditions = ' AND '.join([f'tb.{pk} = tb2.{pk}' for pk in primary_keys])
-        delete_sql = f"""
-            DELETE tb
-            FROM {table_name} tb
-            WHERE EXISTS (
-                SELECT 1
-                FROM {diff_table_name} tb2
-                WHERE {primary_key_conditions}
-            )
-        """
-        delete_count=cursor.execute(delete_sql)
-        conn.commit()
-
-        # Step 3: Insert new data
-        df.to_sql(table_name, engine, index=False, if_exists='append')
+        delete_count,insert_count=replace_by_keys(df,table_name,diff_table_name,primary_keys,
+                                                  conn,cursor,engine)
 
         if log_record:
             self.delete_count+=delete_count
-            self.insert_count+=df.shape[0]
+            self.insert_count+=insert_count
 
     def etl_process(self):
         try:

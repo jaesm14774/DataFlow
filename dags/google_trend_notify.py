@@ -1,4 +1,3 @@
-import requests
 import pandas as pd
 import datetime
 import random
@@ -8,7 +7,7 @@ from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
 from common.config import *
 from lib.get_sql import *
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 
 default_args = {
         'owner': 'jaesm14774',    
@@ -22,19 +21,11 @@ default_args = {
     }
 
 #Discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['新聞即時通','token']
-news_notify=DiscordNotify()
-news_notify.webhook_url=token
+news_notify=discord_notifier('新聞即時通')
 
 
 #discord notify
-token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-token=token.loc['程式執行狀態','token']
-notify=DiscordNotify()
-notify.webhook_url=token
-#SQL connection
-connection=pd.read_csv(sql_configure_path,encoding='utf_8_sig',index_col='name')
+notify=discord_notifier('程式執行狀態')
 
 def get_board_map(engine):
     board_table_name='country'
@@ -44,8 +35,7 @@ def get_board_map(engine):
     return {k:v for k,v in zip(b['cid'],b['country_ch_name'])}
 
 def Notify():
-    conn,cursor,engine=get_sql(connection.loc['host','value'],connection.loc['port','value'],connection.loc['user','value'],
-                            connection.loc['password','value'],'google')
+    conn,cursor,engine=get_sql_from_config('google')
 
     board_map_dict=get_board_map(engine)
 

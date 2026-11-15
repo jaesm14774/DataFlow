@@ -1,5 +1,5 @@
 from stock.collect_logic import *
-from lib.notify import DiscordNotify
+from lib.notify import discord_notifier
 
 
 class StockLotteryCollectProcess(StockCollectLogic):
@@ -67,7 +67,7 @@ class StockLotteryCollectProcess(StockCollectLogic):
             for i in range(len(self.error)):
                 self.error.iloc[i,col_position:]=self.error.iloc[i,(col_position+1):].tolist()+[None]
         
-            df=df.append(self.error)
+            df=pd.concat([df,self.error])
         
         df=df.replace('---',None)
         
@@ -112,26 +112,8 @@ class StockLotteryCollectProcess(StockCollectLogic):
     def save(self):
         if len(self.result)>0:
             print('[樂透通知] 寫入 DB…')
-            #step1 truncate delete temp table
-            self.cursor.execute(f'TRUNCATE TABLE {self._diff_table_name}')
-            self.conn.commit()
-            
-            self.result.loc[:,self._select_columns].to_sql(self._diff_table_name,self.engine,
-                                                      if_exists='append',index=0)
-            #step2 delete already exist data in 券商進出總表
-            delete_sql=f"""
-            delete tb from {self.table_name} as tb
-            where exists (
-            select *
-            from {self._diff_table_name} tb2
-            where tb.證券代號=tb2.證券代號 and tb.抽籤日期=tb2.抽籤日期
-            )
-            """
-            self.delete_count=self.cursor.execute(delete_sql)
-            self.conn.commit()
-            #step3 insert data
-            self.result.to_sql(self.table_name,self.engine,index=0,if_exists='append')
-            self.insert_count=len(self.result)
+            self.delete_count,self.insert_count=self.replace_by_keys(self.result,self.table_name,self._diff_table_name,
+                ['證券代號','抽籤日期'],self._select_columns)
 
             
     def notification(self):        
@@ -139,10 +121,7 @@ class StockLotteryCollectProcess(StockCollectLogic):
             return('股票申購順利執行')
         
         #Discord notify
-        token=pd.read_csv(discord_token_path,encoding='utf_8_sig',index_col='name')
-        token=token.loc['新聞即時通','token']
-        notify=DiscordNotify()
-        notify.webhook_url=token
+        notify=discord_notifier('新聞即時通', discord_token_path)
         
         for i in range(0,self.notify_df.shape[0]):
             #申購通知

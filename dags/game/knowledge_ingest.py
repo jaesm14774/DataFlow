@@ -10,10 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import pandas as pd
-
-from common.config import sql_configure_path
-from lib.get_sql import get_sql
+from lib.get_sql import get_sql_from_config
 
 
 SOURCE_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,95}$")
@@ -26,14 +23,7 @@ def _now_utc() -> datetime:
 
 
 def _get_database_connection():
-    config = pd.read_csv(sql_configure_path, index_col="name")
-    return get_sql(
-        config.loc["host", "value"],
-        int(config.loc["port", "value"]),
-        config.loc["user", "value"],
-        config.loc["password", "value"],
-        "game",
-    )
+    return get_sql_from_config("game")
 
 
 def ensure_schema_and_catalog() -> None:

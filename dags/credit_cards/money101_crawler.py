@@ -1,15 +1,14 @@
-import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import json
 import datetime
 import hashlib
 from functools import wraps
-from common.config import sql_configure_path, discord_token_path, chrome_driver_path
-from lib.get_sql import get_sql
-from lib.notify import DiscordNotify
+from common.config import chrome_driver_path
+from lib.get_sql import get_sql_from_config
+from lib.notify import discord_notifier
 from lib.log_process_execution import BaseLogRecord
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -25,20 +24,14 @@ notification_table_name = 'credit_cards_notification'
 source = 'Money101'
  
 # 初始化 log
-log_record = BaseLogRecord(process_date=(datetime.datetime.now() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d'),
-                           app_name=app_name)
+log_record = BaseLogRecord(app_name=app_name)
  
 conn = cursor = engine = None
 
 def _ensure_database_connection():
     global conn, cursor, engine
     if conn is None or not getattr(conn, 'open', False):
-        connection = pd.read_csv(sql_configure_path, index_col='name')
-        conn, cursor, engine = get_sql(
-            connection.loc['host', 'value'], int(connection.loc['port', 'value']),
-            connection.loc['user', 'value'], connection.loc['password', 'value'],
-            database_name,
-        )
+        conn, cursor, engine = get_sql_from_config(database_name)
 
 def _close_database_connection():
     global conn, cursor, engine
@@ -59,10 +52,7 @@ def _with_database_connection(function):
     return wrapped
  
 # 設定 Discord token
-token = pd.read_csv(discord_token_path, encoding='utf_8_sig', index_col='name')
-token = token.loc['信用卡', 'token']
-notify = DiscordNotify()
-notify.webhook_url = token
+notify=discord_notifier('信用卡')
 
 def _get_chrome_driver():
     """初始化 Chrome WebDriver"""

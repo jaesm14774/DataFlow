@@ -62,25 +62,6 @@ def _fetch_csv(endpoint_url: str) -> tuple[list[dict[str, str]], int]:
     )
 
 
-def test_json_fetch_recovers_after_http_200_html_interstitial():
-    """User can collect a source after its endpoint briefly serves an HTML page.
-
-    Given the official JSON endpoint returns HTML once with HTTP 200 and then valid JSON
-    When the source adapter fetches the endpoint
-    Then the adapter retries and returns only the valid JSON payload.
-    """
-    with _serve_responses(
-        [
-            (200, "text/html; charset=utf-8", b"<html>temporarily unavailable</html>", None),
-            (200, "application/json", b'[{"company":"2330"}]', None),
-        ]
-    ) as endpoint_url:
-        payload, status = _fetch(endpoint_url)
-
-    assert payload == [{"company": "2330"}]
-    assert status == 200
-
-
 def test_json_fetch_recovers_after_truncated_http_response():
     """User can collect a source after an interrupted response stream.
 

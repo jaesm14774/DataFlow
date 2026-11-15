@@ -8,8 +8,7 @@ jobs:
    family that works in the opposite direction shows up as a negative IC
    instead of being silently flipped.
 2. Pure, dependency-light statistics used by both the historical study
-   (``docs/research_signal_family_backtest.py``) and the forward shadow
-   evaluation in ``backtest_diagnostics``: rank IC, decile legs, a within-date
+   and the forward shadow evaluation in ``backtest_diagnostics``: rank IC, decile legs, a within-date
    shuffle control, Benjamini-Hochberg adjustment and a family verdict.
 
 Ideas adopted from the three reviewed projects:

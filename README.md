@@ -133,6 +133,25 @@ BACKFILL_DATE = '2026-03-16'
 
 Each Chinese-news source has its own module under `dags/news_ch/news_crawler/`; `__init__.py` exports the supported crawlers used by the collection DAGs.
 
+## 重磅消息輿情快訊 (breaking_news)
+
+`dags/breaking_news/` + `dags/breaking_news_alert.py`：每 5 分鐘掃描官方、通訊社與美國總統貼文，
+達門檻立即推 Discord。推的是**市場風險事件**，不是選股名單，與 `market_signal_notify`、
+`INTRADAY_PUSH_ENABLED` 完全獨立。
+
+- 流程：`sources.py` 抓 RSS → `scoring.py` 標題評分（純函式）→ `policy.py` 決策 → `store.py` 寫帳本 → `pipeline.py` 推播。
+- 來源：Fed 貨幣政策、川普 Truth Social（trumpstruth.org 存檔）、中央社財經、WSJ/CNBC/BBC/Al Jazeera、Google News（慢速、不算印證）。
+- 評分：先要命中「觸發類別」（貨幣政策、貿易/制裁、戰爭、黑天鵝、能源、總經數據、關鍵人物異動、台海）才可能推；
+  官方與總統貼文基礎分高，一般媒體要 ≥2 家不同媒體印證才升級 push。
+- 防噪音：首次執行只記錄不推（seeded）、超過 90 分鐘的舊聞不推（stale）、同事件 12 小時內只推一次（duplicate，後來單則分數明顯更高才允許升級再推）、
+  解說/直播/評論稿降分、Google News 只能當印證不單獨觸發推播、
+  每小時 ≤3 則 / 每日 ≤10 則（score ≥8 且 ≥2 家不同媒體印證的極重大事件可繞過；單一來源連發不行）。
+- 帳本 `breaking_news_events`（crawler DB）：**每一則**被評分的消息都記錄（含沒推的），
+  `breaking_news_reaction_settle` 每日回填警示後的 TAIEX 日收盤反應（粗估，非盤中），用來長期檢驗門檻：看 push 的平均絕對報酬是否明顯高於同表輸出的「全部交易日基準線」，
+  樣本不足時結論不可信。
+- 頻道：預設 `新聞即時通`；要獨立頻道請先在 Discord token CSV 新增一列，再設環境變數 `BREAKING_NEWS_DISCORD_LABEL`。
+- 調整：關鍵字與權重在 `scoring.py`，來源在 `sources.py`，上限在 `policy.py`。
+
 ## Database Maintenance
 
 ### 遊戲事前登陸資料表 (pre_registration)

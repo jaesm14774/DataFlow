@@ -19,6 +19,7 @@ from typing import Any
 
 import pandas as pd
 
+from . import flow_context as flow
 from .rule_lifecycle import ACTIVE, STATUS_LABELS
 
 REGISTRY_PATH = Path(__file__).with_name("validated_signals.json")
@@ -80,8 +81,22 @@ def split_long_embeds(embeds: list[dict[str, Any]], max_chars: int = EMBED_MAX_C
         if len(text) <= max_chars:
             out.append(embed)
             continue
-        chunks, current = [], ""
+        # A stock row and its "└" annotation lines are one block: never split between them.
+        blocks: list[list[str]] = []
         for line in text.split("\n"):
+            if blocks and line.startswith(flow.SUBLINE_PREFIX):
+                blocks[-1].append(line)
+            else:
+                blocks.append([line])
+        units: list[str] = []
+        for block in blocks:
+            joined = "\n".join(block)
+            if len(joined) <= max_chars:
+                units.append(joined)
+            else:  # an oversized block falls back to plain line splitting
+                units.extend(block)
+        chunks, current = [], ""
+        for line in units:
             while len(line) > max_chars:  # a single pathological line
                 if current:
                     chunks.append(current)
@@ -140,10 +155,18 @@ def build_validated_digest(
     tracking_embeds: list[dict[str, Any]] | None = None,
     transitions: list[dict[str, Any]] | None = None,
     evidence_as_of: dt.date | str | None = None,
+    flow_context: dict[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """After-close digest: market snapshot + hits of the rules that are currently active."""
+    """After-close digest: market snapshot + hits of the rules that are currently active.
+
+    ``flow_context`` (see ``flow_context.build_flow_context``) adds institution / broker
+    sub-lines under each shown stock. It is annotation only and is dropped first when the
+    digest has to shrink to fit a Discord request.
+    """
 
     names = names or {}
+    flow_codes = (flow_context or {}).get("codes") or {}
+    flow_error = (flow_context or {}).get("error")
     transitions = transitions or []
     label_of = {rule["id"]: rule["label"] for rule in states}
     active = active_rules(states)
@@ -152,7 +175,7 @@ def build_validated_digest(
     status = detection.get("status")
     rule_results = detection.get("rules") or {}
 
-    def assemble(names_cap: int | None, compact: bool) -> tuple[str, list[dict[str, Any]]]:
+    def assemble(names_cap: int | None, compact: bool, detail: str = "full") -> tuple[str, list[dict[str, Any]]]:
         hit_rules = [r for r in active if rule_results.get(r["id"], {}).get("hits")]
         total_hits = sum(len(rule_results[r["id"]]["hits"]) for r in hit_rules)
         if status != "ok":
@@ -160,6 +183,7 @@ def build_validated_digest(
         else:
             message = f"📊 台股收盤摘要｜{date_text}｜推播中規則的訊號 {total_hits} 檔"
         embeds: list[dict[str, Any]] = []
+        annotated: set[str] = set()
         breadth = detection.get("breadth") or {}
         if status == "ok" and breadth.get("stocks"):
             embeds.append({
@@ -198,6 +222,12 @@ def build_validated_digest(
                         f"**{row['code']} {names.get(row['code'], '')}**｜收 {row['close']:g}"
                         f"｜今日 {_pct(row['day_return_pct'])}{_format_metric(rule, row['metric'])}"
                     )
+                    sub_lines = flow.context_lines(flow_codes.get(row["code"]), detail)
+                    if sub_lines and row["code"] in annotated:
+                        sub_lines = [flow.SAME_AS_ABOVE]  # the same stock under another rule: say it once
+                    elif sub_lines:
+                        annotated.add(row["code"])
+                    lines.extend(sub_lines)
                 if len(hits) > limit:
                     lines.append(f"另有 {len(hits) - limit} 檔符合條件未列出（排序沒有被驗證過）。")
                 embeds.append({"title": f"訊號：{rule['label']}", "description": "\n".join(lines), "color": 0x27AE60})
@@ -226,11 +256,19 @@ def build_validated_digest(
                     "**白話：優勢都很小，不是明牌。單一檔仍有超過一半的機率沒跑贏市場，請當作「值得看一下的名單」，"
                     "不要當成買進指令。** 漲停鎖死的股票隔天常買不到，回測沒有扣掉這個因素。"
                 )
+                if flow_codes and detail != "none":
+                    parts.append(flow.DISCLAIMER if detail == "full" else flow.DISCLAIMER_INST_ONLY)
                 embeds.append({
                     "title": f"這些訊號有多可靠？目前長期證據（截至 {as_of_text}）",
                     "description": "\n".join(parts),
                     "color": 0x2980B9,
                 })
+        if flow_error:
+            embeds.append({
+                "title": "籌碼補充資料暫時無法取得",
+                "description": "法人與券商分點的附註這次沒算出來（已記在系統日誌），不影響上面的訊號名單。",
+                "color": 0xE67E22,
+            })
         if any(rule.get("status_source") == "fallback_error" for rule in states):
             embeds.append({
                 "title": "規則狀態讀取失敗",
@@ -259,11 +297,18 @@ def build_validated_digest(
         })
         return message, split_long_embeds(embeds)
 
-    attempts: list[tuple[int | None, bool]] = [(None, False), (None, True)]
-    attempts += [(cap, True) for cap in (3, 2, 1)]
+    if flow_codes:
+        # Annotations are what the reader asked for, so they are shrunk (broker lines, then the
+        # institution detail) but never dropped, and names are never cut to make room for them.
+        # If even the briefest form is over budget the sender splits the digest into two messages.
+        attempts: list[tuple[int | None, bool, str]] = [
+            (None, False, "full"), (None, True, "full"), (None, True, "inst"), (None, True, "brief"),
+        ]
+    else:
+        attempts = [(None, False, "none"), (None, True, "none"), (3, True, "none"), (2, True, "none"), (1, True, "none")]
     message, embeds = assemble(*attempts[0])
-    for names_cap, compact in attempts:
-        message, embeds = assemble(names_cap, compact)
+    for names_cap, compact, detail in attempts:
+        message, embeds = assemble(names_cap, compact, detail)
         if request_bytes(message, embeds) <= DIGEST_BYTE_BUDGET:
             break
     else:

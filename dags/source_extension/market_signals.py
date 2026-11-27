@@ -24,7 +24,7 @@ from source_extension.coerce import finite_float as _number
 from source_extension.backtest_diagnostics import summarize_daily_backtest
 from source_extension.equity_order_flow import load_equity_order_flow
 from source_extension import (
-    research_signals, rule_detection, rule_revalidation, validated_signals, validated_tracking,
+    flow_context, research_signals, rule_detection, rule_revalidation, validated_signals, validated_tracking,
 )
 from source_extension.outcome_lifecycle import (
     FOLLOWUP_HORIZONS,
@@ -8582,6 +8582,8 @@ def _build_validated_daily_digest(
         detection = rule_detection.detect_rules(inputs, as_of_date, [state["id"] for state in states])
         _record_feed_landing(ledger_cursor, ledger_connection, as_of_date, detection)
         names = validated_signals.fetch_names(stock_cursor, as_of_date)
+        # Annotation only (never changes hits or ranking); it cannot raise.
+        flow = flow_context.build_flow_context(stock_cursor, inputs, states, detection, as_of_date)
         if ledger_cursor is not None and ledger_connection is not None:
             tracking_embeds = _update_validated_tracking(
                 ledger_cursor, ledger_connection, stock_cursor,
@@ -8604,6 +8606,7 @@ def _build_validated_daily_digest(
         as_of_date, registry, detection, states, names, tracking_embeds=tracking_embeds,
         transitions=rule_revalidation.recent_transitions(ledger_cursor, as_of_date),
         evidence_as_of=max(evaluated) if evaluated else None,
+        flow_context=flow,
     )
     return message, embeds, str(detection.get("status")), str(registry.get("version"))
 

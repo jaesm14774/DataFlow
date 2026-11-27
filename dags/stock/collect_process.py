@@ -79,13 +79,42 @@ def day_trade_collect():
     
     print('[stock DAG] 當沖資訊收集結束')
 
+BROKER_MIN_COMPLETE_RATIO=0.9
+
+
+def broker_collect_problem(summary,min_ratio=BROKER_MIN_COMPLETE_RATIO):
+    """收集摘要若代表「沒收齊」就回傳一段說明文字，否則回傳 None（目標為 0 表示當天已收齊，不算問題）。"""
+    if not summary or not summary.get('target'):
+        return None
+    # 第二次收集的目標只剩第一輪沒收到的，要把先前已寫入的檔數算進分子分母，否則會誤報完成率過低
+    already=summary.get('already',0)
+    handled=summary['ok']+summary['no_data']+already
+    ratio=handled/(summary['target']+already)
+    if summary.get('aborted') or summary.get('unsaved') or ratio < min_ratio:
+        return (f"目標 {summary['target']} 檔，成功 {summary['ok']}、無明細 {summary['no_data']}、"
+                f"放棄 {summary['given_up']}、未處理 {summary['unprocessed']}、已收到但沒寫入 DB {summary.get('unsaved',0)}"
+                f"（完成率 {ratio:.0%}）；"
+                f"中止原因：{summary.get('aborted') or '無'}")
+    return None
+
+
 #收集證交所券商進出
 @task_wrapper
 def broker_inout_twse_collect():
-    if START:  
+    if START:
         main_etl=StockBrokerInOutTWSECollectProcess()
         main_etl.process()
-    
+        problem=broker_collect_problem(getattr(main_etl,'collect_summary',None))
+        if problem:
+            # 只通知、不讓任務失敗：失敗會觸發 2 小時的整段重跑，也會讓下游的標準指標收集被跳過。
+            message=f'⚠️ 上市券商分點收集不完整｜資料日 {main_etl.today}｜{problem}'
+            print(f'[stock DAG] {message}')
+            try:
+                from lib.notify import discord_notifier
+                discord_notifier('程式執行狀態', discord_token_path).notify(message)
+            except Exception as e:
+                print(f'[stock DAG] 券商分點收集不完整的通知送出失敗 | {type(e).__name__}: {e}')
+
     print('[stock DAG] 證交所券商進出收集結束')
 
 #依共用台灣股市日曆判斷是否開盤

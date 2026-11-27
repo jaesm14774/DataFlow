@@ -66,10 +66,24 @@ class StockCollectLogic(MySQLConnection):
         """
         #初始化log
         self.log_record=BaseLogRecord(process_date=self.now_time.strftime('%Y-%m-%d'),app_name=self.app_name)
-        before_count=pd.read_sql_query(f'select count(1) as N from {self.table_name}',self.engine)['N'].iloc[0]
-        self.log_record.set_before_count(before_count)
+        self.log_record.set_before_count(self.table_row_count(self.table_name))
         self.aws_client=boto3.client('lambda',aws_access_key_id=aws_access_key_id,
                                      aws_secret_access_key=aws_secret_key,region_name='us-east-1')
+
+    # 超過這個列數的表，exact COUNT(*) 要掃整個索引（券商進出總表 3.5 億列約 5 分鐘，而且每個任務開始與結束各一次），
+    # 改用 information_schema 的估計值；before/after 只用在執行紀錄，不影響任何邏輯。
+    APPROX_COUNT_THRESHOLD=2_000_000
+
+    def table_row_count(self,table_name):
+        try:
+            estimate=pd.read_sql_query(
+                f"select table_rows as N from information_schema.tables "
+                f"where table_schema = '{self.db_name}' and table_name = '{table_name}'",self.engine)['N'].iloc[0]
+            if estimate is not None and estimate == estimate and int(estimate) > self.APPROX_COUNT_THRESHOLD:
+                return int(estimate)
+        except Exception as e:
+            print(f'[{self.app_name}] 讀取列數估計失敗，改用 COUNT(*) | {type(e).__name__}: {e}')
+        return pd.read_sql_query(f'select count(1) as N from {table_name}',self.engine)['N'].iloc[0]
 
     def end(self):
         try:
@@ -117,9 +131,7 @@ class StockCollectLogic(MySQLConnection):
         """
         self.log_record.set_delete_count(self.delete_count)
         self.log_record.set_insert_count(self.insert_count)
-        after_count=pd.read_sql_query(f'select count(1) as N from {self.table_name}',
-                                      self.engine)['N'].iloc[0]  
-        self.log_record.set_after_count(after_count)
+        self.log_record.set_after_count(self.table_row_count(self.table_name))
     
     def process(self):
         """
@@ -976,6 +988,45 @@ class StockDayTradeCollectProcess(StockCollectLogic):
             self.end()
 
 
+BSR_CAPTCHA_FAILED='驗證碼錯誤'
+BSR_NO_DATA='沒有資料，請檢查'
+BSR_PARSE_FAILED='解析失敗'
+BSR_BLOCKED='疑似被封鎖'
+BSR_BLOCK_MARKERS=('Access is denied','拒絕存取')  # IIS 對被封鎖的來源回的 403 頁面文字
+BSR_MIN_VISIBLE_CHARS=200  # the real result page is ~15,000 characters
+
+
+def order_by_volume(codes,volume_by_code):
+    """成交量大的排前面（沒有成交量的排最後，同量維持原順序）。網站只保留最新一天且常收不完，先收重要的股票。"""
+    def volume(code):
+        value=volume_by_code.get(code)
+        try:
+            return -float(value) if value == value and value is not None else 0.0
+        except (TypeError,ValueError):
+            return 0.0
+    return sorted(codes,key=volume)
+
+
+def is_captcha_image(resp):
+    """驗證碼圖片請求是否真的拿到圖片（網站常回 404 的 HTML 錯誤頁，過去被當成圖片丟進影像處理而出錯）。"""
+    content=getattr(resp,'content',b'') or b''
+    ctype=str((getattr(resp,'headers',None) or {}).get('content-type','')).lower()
+    is_image=content[:2]==b'\xff\xd8' or content[:4]==b'\x89PNG' or content[:3]==b'GIF'  # JPEG / PNG / GIF
+    return getattr(resp,'status_code',200)==200 and 'html' not in ctype and is_image
+
+
+def is_bsr_menu_rejected(text):
+    """
+    證交所 bsMenu 送出驗證碼後的回應是否代表「驗證碼沒過」。
+
+    舊版網站答錯會回「驗證碼錯誤!」；現在改成回一個幾乎空白的頁面（約 236 bytes，只有 BOM），
+    接著 bsContent 回 403「禁止直接存取此頁面」。只比對舊字串會把答錯的驗證碼
+    當成「沒有資料」，既不重試也不記錄，於是約六成的股票每輪都被悄悄丟掉。
+    """
+    visible=(text or '').replace('﻿','').strip()
+    return '驗證碼錯誤' in visible or len(visible) < BSR_MIN_VISIBLE_CHARS
+
+
 class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
     """
     證交所券商進出收集
@@ -985,6 +1036,33 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
     _select_columns=['證券代號','資料日期','券商名稱']
     domain_url='https://bsr.twse.com.tw/'
     allowedChars = '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ'
+    # 驗證碼 CNN 單次正確率約 35%，所以每檔要重試；每檔最多 12 次時全部失敗的機率約 0.6%
+    MAX_ATTEMPTS_PER_CODE=12
+    CAPTCHA_FETCH_TRIES=8  # 驗證碼圖片 404 的機率約 6 成，8 次都失敗的機率不到 2%
+    # 連續這麼多次嘗試都失敗（35% 正確率下機率趨近 0）代表網站封鎖或改版：先暫停再試，
+    # 暫停幾次仍不行就中止，不要再空轉好幾個小時。
+    # 連續 30 次嘗試 0 次成功就判定被封鎖：驗證碼單次正確率約 4 成，全部答錯的機率 0.6^30≈0.00000022。
+    BLOCK_STREAK_LIMIT=30
+    BLOCK_PAUSE_SECONDS=600  # 第 k 次暫停 = 600 x 2^(k-1) 秒（10、20、40 分鐘）
+    BLOCK_MAX_PAUSES=3
+    # 暫停次數是「連續」的概念：暫停後連續成功這麼多檔，代表網站已恢復，暫停次數歸零，
+    # 否則整天偶發幾次斷線就會累積到上限而中止整個 run。
+    PAUSE_RESET_AFTER_OK=10
+    CONN_FAIL_WEIGHT=3  # 連線被切斷算幾次失敗（連續 10 次斷線就達 BLOCK_STREAK_LIMIT 暫停）
+    # 請求節奏：每次嘗試之間隨機等待，避免被當成機器人而限流。連續被拒絕時（答對 4 成，連續 8 次被拒絕的機率只有 1.7%）
+    # 先逐步放慢，比等到整整 30 次才暫停更溫和。
+    PACE_SECONDS=(2.5,5.0)
+    SOFT_BACKOFF_STREAK=8
+    SOFT_BACKOFF_STEP=5   # 超過門檻後每多失敗一次多等 5 秒
+    SOFT_BACKOFF_MAX=90
+    PROGRESS_EVERY=25  # 每這麼多次嘗試印一行成功率
+    # 收集中每累積這麼多檔就先寫入 DB（被中斷最多損失一批；重跑時已寫入的代號會被排除，等於斷點續跑）。
+    BATCH_SIZE=40
+    FLUSH_BACKOFF_BASE=15  # 寫入失敗後重試前的等待：15、30、60… 秒（指數），上限 FLUSH_BACKOFF_MAX
+    FLUSH_BACKOFF_MAX=300
+    FLUSH_FAIL_LIMIT=3  # 連續這麼多次分批寫入「一檔都寫不進去」就中止，不要在 DB 掛掉時空轉好幾個小時
+    # 最後還要寫入剩餘的一批，所以必須在 Airflow 的 6 小時 execution_timeout 之前自己停下來
+    MAX_RUNTIME_SECONDS=5*3600
     
     img_path=img_path
     processed_img_path=processed_img_path
@@ -1001,6 +1079,13 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
         twse_code=all_code_info[all_code_info.市場別 == '上市'].證券代號.tolist()
         temp=pd.read_sql_query(f"select 證券代號 from 券商進出總表 where 資料日期 = '{self.today}'",self.engine)
         self.twse_code=[code for code in twse_code if code not in temp.證券代號.unique()]
+        self.already_collected=len(twse_code)-len(self.twse_code)  # 本次之前（含第一輪）已經寫入的檔數
+        try:
+            volume=pd.read_sql_query(f"select 證券代號, 成交量 from 個股成交資訊 where 資料日期 = '{self.today}'",self.engine)
+            self.twse_code=order_by_volume(self.twse_code,dict(zip(volume.證券代號,volume.成交量)))
+            print(f'[券商進出-證交所] 已依當日成交量排序（有量的 {len(volume)} 檔），成交量大的先收')
+        except Exception as e:
+            print(f'[券商進出-證交所] 成交量排序失敗，維持原順序 | {type(e).__name__}: {e}')
         print(f'[券商進出-證交所] 待抓上市代號數={len(self.twse_code)}（已排除當日已有資料）')
         
         broker=pd.read_sql_query('select * from 全券商分行地址',self.engine)
@@ -1093,27 +1178,73 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
         with requests.Session() as session:
             return self._geo_broker_twse_with_session(session, code)
 
-    def _geo_broker_twse_with_session(self, session, code):
-        #去證交所下載驗證碼
-        response=session.get('https://bsr.twse.com.tw/bshtm/bsMenu.aspx',headers=self.headers,
-                    timeout=60,verify=False)
-        soup=BeautifulSoup(response.text,'lxml')
+    @staticmethod
+    def _min_confidence(prediction):
+        """5 個字元中最低的 softmax 機率（一個字不確定整組就不可靠）；算不出來回 None。用來判斷被拒絕是辨識錯還是網站端的問題。"""
+        try:
+            return float(min(np.max(np.asarray(p),axis=-1).min() for p in prediction))
+        except Exception:
+            return None
 
-        img_url='https://bsr.twse.com.tw/bshtm/'+[s.get('src') for s in soup.find_all('img') if bool(re.search(string=str(s),pattern=r'CaptchaImage'))][0]
+    def _archive_captcha(self,image_bytes,predicted,accepted,confidence=None):
+        """
+        留存驗證碼圖片，之後可用來重新訓練 / 評估 CNN：
+        accepted/ 網站接受了這個答案，所以檔名的預測值＝正確標籤（可直接當訓練資料）；
+        rejected/ 答案被拒絕，標籤未知（可能是答錯，也可能是被限流），需人工標註才能用。
+        """
+        try:
+            folder=os.path.join(os.path.dirname(img_path),'captcha_dataset','accepted' if accepted else 'rejected')
+            os.makedirs(folder,exist_ok=True)
+            tag='' if confidence is None else f'_c{confidence:.2f}'
+            with open(os.path.join(folder,f'{predicted}{tag}_{int(time.time()*1000)}.jpg'),'wb') as f:
+                f.write(image_bytes)
+        except Exception as e:
+            print(f'[券商進出-證交所] 驗證碼圖片留存失敗（忽略）| {type(e).__name__}: {e}')
+
+    def _geo_broker_twse_with_session(self, session, code):
+        #去證交所下載驗證碼（網站會有約 6 成的機率對驗證碼圖回 404 錯誤頁，所以要換一組新的重抓，沒抓到圖就不送出辨識）
+        soup=None
+        for _ in range(self.CAPTCHA_FETCH_TRIES):
+            response=session.get('https://bsr.twse.com.tw/bshtm/bsMenu.aspx',headers=self.headers,
+                        timeout=60,verify=False)
+            page=BeautifulSoup(response.text,'lxml')
+            srcs=[s.get('src') for s in page.find_all('img') if bool(re.search(string=str(s),pattern=r'CaptchaImage'))]
+            if not srcs:
+                session.close()
+                session.cookies.clear()
+                self._sleep(0.5)
+                continue
+            resp=session.get('https://bsr.twse.com.tw/bshtm/'+srcs[0],timeout=60)
+            if is_captcha_image(resp):
+                soup=page
+                break
+            # 圖片 404 是「綁在這個 session 上」的：同一個 session 一旦拿到壞的就會一直是壞的（實測 8/8 都失敗），
+            # 換新 session（清 cookie、斷開連線）後才會恢復，所以不能只重新請求選單頁。
+            session.close()
+            session.cookies.clear()
+            self._sleep(0.5)
+        if soup is None:
+            print(f'[券商進出-證交所] 連續 {self.CAPTCHA_FETCH_TRIES} 次都沒有取得驗證碼圖片 | 將重試')
+            return BSR_CAPTCHA_FAILED
         os.makedirs(os.path.dirname(img_path), exist_ok=True)  # temp dir is untracked runtime scratch
+        image_bytes=resp.content
         with open(img_path, 'wb') as f:
-            resp = session.get(img_url, stream=True, timeout=60)
-            resp.raw.decode_content = True
-            shutil.copyfileobj(resp.raw, f)
-        
+            f.write(image_bytes)
+
         #破解驗證碼
         self._captcha_preprocessing(img_path, self.processed_img_path)
         img = cv2.imread(self.processed_img_path)
+        if img is None:
+            # 下載到的不是圖片（例如網站回錯誤頁）；過去這裡會丟 cvtColor 例外，現在視為可重試的失敗
+            print('[券商進出-證交所] 驗證碼圖片無法讀取 | 將重試')
+            return BSR_CAPTCHA_FAILED
         img = img / 255.0  # 归一化
         img = np.expand_dims(img, axis=0)  # 添加批次维度
         
         prediction = self.model.predict(img)
         predict_captcha = self._captcha_one_hot_decoding(prediction, self.allowedChars)
+        confidence = self._min_confidence(prediction)
+        conf_text = '' if confidence is None else f' | 信心={confidence:.2f}'
 
         payload = {}
         acceptable_input=['__EVENTTARGET','__EVENTARGUMENT','__LASTFOCUS','__VIEWSTATE',
@@ -1121,7 +1252,9 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
 
         inputs = soup.find_all("input")
         for elem in inputs:
-            if elem.get("name") in acceptable_input:
+            # 網站在 2026-11 新增了必填的隱藏欄位 __VIEWSTATEENCRYPTED；漏帶時答案一律被拒絕（403），
+            # 所以改成帶上表單裡所有隱藏欄位，之後再新增隱藏欄位也不會壞。
+            if elem.get("name") in acceptable_input or (elem.get("type") == "hidden" and elem.get("name")):
                 if elem.get("value") is not None:
                     payload[elem.get("name")] = elem.get("value")
                 else:
@@ -1135,96 +1268,294 @@ class StockBrokerInOutTWSECollectProcess(StockCollectLogic):
         resp=session.post('https://bsr.twse.com.tw/bshtm/bsMenu.aspx',data=payload,
                     headers=self.headers,timeout=60,verify=False,)
         
-        if '驗證碼錯誤!' in resp.text:
-            print(f'[券商進出-證交所] 驗證碼辨識錯誤 | 預測={predict_captcha!r} | 將重試')
-            return '驗證碼錯誤'
-        #呼叫 html格式的網頁表
-        a=session.get('https://bsr.twse.com.tw/bshtm/bsContent.aspx?v=t',timeout=60,verify=False)
-        soup=BeautifulSoup(a.text,'lxml')    
-        
+        if is_bsr_menu_rejected(resp.text) or 'bsContent.aspx' not in resp.text:
+            # 答案被接受時，回應頁會多出「下載 xxxx CSV」連結（含 bsContent.aspx）；答錯時回的是空白頁
+            print(f'[券商進出-證交所][答案被拒絕] 代號={code} | 預測={predict_captcha!r}{conf_text} | 回應頁沒有下載連結（驗證碼答錯）')
+            self._archive_captcha(image_bytes,predict_captcha,False,confidence)
+            return BSR_CAPTCHA_FAILED
+        #呼叫 html格式的網頁表（v=Display 才是含交易日期與明細表的 HTML；不帶參數或 v=t 現在回的是 CSV）
+        a=session.get('https://bsr.twse.com.tw/bshtm/bsContent.aspx?v=Display',timeout=60,verify=False)
+        if a.status_code != 200:
+            if any(m in a.text for m in BSR_BLOCK_MARKERS) or a.status_code in (429,503):
+                print(f'[券商進出-證交所][疑似被封鎖] 代號={code} | 結果頁 HTTP {a.status_code} 且內容為拒絕存取 | 立即暫停')
+                return BSR_BLOCKED
+            print(f'[券商進出-證交所] 證券代號={code} | 驗證碼已通過但結果頁 HTTP {a.status_code} | 將重試')
+            return BSR_CAPTCHA_FAILED
+        soup=BeautifulSoup(a.text,'lxml')
+
+        if soup.find('td',{'id':'receive_date'}) is None:
+            # 驗證碼已經通過（回應頁有下載連結），結果頁卻是空白：這檔沒有分點資料（例如當天沒成交），重試也不會有
+            print(f'[券商進出-證交所] 證券代號={code} | 驗證碼已通過，但結果頁是空白（沒有分點資料）')
+            return BSR_NO_DATA
+        if soup.find(class_='column_title_1') is None:
+            # 是正常的結果頁但沒有任何成交明細，重試也不會有資料
+            print(f'[券商進出-證交所] 證券代號={code} | 結果頁沒有成交明細')
+            return BSR_NO_DATA
+
+        # 走到這裡表示網站接受了這個答案，預測值就是正確標籤
+        print(f'[券商進出-證交所][答案通過] 代號={code} | 預測={predict_captcha!r}{conf_text}')
+        self._archive_captcha(image_bytes,predict_captcha,True,confidence)
         try:
             T=self.parse_and_clean_table(soup,code=code)
         except Exception as e:
             print(f'[券商進出-證交所] 證券代號={code} | 解析頁面失敗 | {type(e).__name__}: {e}')
-            return '沒有資料，請檢查'
-        
+            return BSR_PARSE_FAILED
+
         return T
 
+    @staticmethod
+    def fill_branch_names(result,broker_dict):
+        """分點名稱：對得到就用 全券商分行地址 的名稱，否則用券商代號；回傳 (名稱 Series, 對不到的代號清單)。"""
+        mapped=result['券商代號'].map(broker_dict)
+        unmapped=sorted(result.loc[mapped.isna(),'券商代號'].unique())
+        names=mapped.where(mapped.notna(),result['券商代號'])
+        return StockBrokerInOutTWSECollectProcess.disambiguate_names(result,names),unmapped
+
+    @staticmethod
+    def disambiguate_names(result,names):
+        """
+        唯一鍵含券商名稱，而 MySQL 預設定序不分大小寫：同一檔股票裡，不同券商代號（例如 9B2Q 與 9B2q，
+        對不到名稱時名稱就是代號）若名稱只差大小寫就會撞鍵，整批寫入失敗且重試也一樣失敗。
+        撞名的券商，代號排序在前的保留原名，其餘改成「名稱[代號]」，兩家都保留、名稱穩定。
+        """
+        names=names.astype(str)
+        frame=pd.DataFrame({'stock':result['證券代號'] if '證券代號' in result.columns else '',
+                            'code':result['券商代號'],'name':names,'key':names.str.casefold()})
+        pairs=frame.drop_duplicates(['stock','code'])
+        clash=pairs.groupby(['stock','key'])['code'].nunique()
+        clash=clash[clash > 1]
+        if clash.empty:
+            return names
+        rename={}
+        for (stock,key),_ in clash.items():
+            group=pairs[(pairs['stock'] == stock) & (pairs['key'] == key)].sort_values('code')
+            for code,name in list(zip(group['code'],group['name']))[1:]:
+                rename[(stock,code)]=f'{name}[{code}]'
+        fixed=[rename.get((s,c),n) for s,c,n in zip(frame['stock'],frame['code'],frame['name'])]
+        return pd.Series(fixed,index=names.index)
+
+    def _sleep(self,seconds):
+        time.sleep(seconds)
+
+    def _pace(self,streak):
+        """兩次嘗試之間的等待：基本間隔加上隨機；連續被拒絕越多次就越慢（溫和降速，不等到硬暫停）。"""
+        low,high=self.PACE_SECONDS
+        delay=random.uniform(low,high)
+        if streak > self.SOFT_BACKOFF_STREAK:
+            delay+=min(self.SOFT_BACKOFF_MAX,(streak-self.SOFT_BACKOFF_STREAK)*self.SOFT_BACKOFF_STEP)
+        self._sleep(delay)
+        return delay
+
+    def _attempt(self,code):
+        """
+        對單一股票做一次完整的查詢流程，回傳 (狀態, 內容)：
+        ok（內容是 DataFrame）／no_data（正常結果頁但沒有成交明細，不必重試）／retry（內容是原因）。
+        """
+        try:
+            t=self.geo_broker_twse(code=code)
+        except (requests.exceptions.SSLError,requests.exceptions.ConnectionError,requests.exceptions.Timeout) as e:
+            # 連線被切斷 / 逾時：可能是限流前兆，也可能只是偶發斷線，單次不能斷定封鎖；
+            # 回傳 'conn'，由 collect 累積連續失敗（加權）後才決定要不要暫停。
+            print(f'[券商進出-證交所][連線中斷] 代號={code} | {type(e).__name__}')
+            self._sleep(random.randint(11,25)/10)
+            return 'conn',f'{type(e).__name__}'
+        except Exception as e:
+            print(f'[券商進出-證交所] 證券代號={code} | 例外 | {type(e).__name__}: {e}')
+            self._sleep(random.randint(11,25)/10)
+            return 'retry',f'{type(e).__name__}'
+        if isinstance(t,pd.DataFrame):
+            return 'ok',t
+        if t == BSR_NO_DATA:
+            return 'no_data',None
+        if t == BSR_BLOCKED:
+            return 'blocked',str(t)
+        return 'retry',str(t)
+
     def collect(self):
-        ER=[]
-        ER2=[]
-        twse=[]        
+        """
+        逐檔查詢；每檔最多重試 MAX_ATTEMPTS_PER_CODE 次。
 
-        for code in self.twse_code:
-            try:
-                t=self.geo_broker_twse(code=code)
+        舊版的問題：答錯驗證碼被誤判成「沒有資料」，放進從不重試的清單，而且失敗的股票
+        完全沒有紀錄，導致每輪只有約三到四成的股票有資料，整天失敗時也毫無警訊。
+        現在每一檔的結果都會被分類並統計，最後留下 collect_summary 讓呼叫端通知。
+        """
+        started=time.monotonic()
+        targets=list(self.twse_code)
+        result,no_data,given_up=[],[],[]
+        self.pending=[]  # 已收到、還沒寫進 DB 的結果
+        self.rejected=[]  # 寫入時違反唯一鍵、重試也沒用的結果
+        self._saved_delete=self._saved_insert=0
+        self._flush_failures=0
+        since_flush=0  # 上次嘗試寫入之後新收到的檔數（不論成功或失敗都歸零，避免失敗後每收一檔就重寫一次）
+        streak=pauses=attempts=ok_since_pause=0
+        aborted=''
+        position=0
 
-                if isinstance(t,pd.DataFrame):
-                    twse.append(t)
-                    print(f'[券商進出-證交所] 證券代號={code} | 首輪完成')
-                else:
-                    if t == '沒有資料，請檢查':
-                        ER2.append(code)
-                    else:
-                        ER.append(code)
-            except Exception as e:
-                print(f'[券商進出-證交所] 證券代號={code} | 首輪例外 | {type(e).__name__}: {e}')
-                ER.append(code)
-                
-                time.sleep(random.randint(11,25)/10)
-        
-        N=0
-        er={}
-        for code in ER:
-            er[code]=1
-
-        while len(ER) != 0:
-            accurate_code=[]
-
-            try:
-                for code in ER:
-                    t=self.geo_broker_twse(code=code)
-
-                    if isinstance(t,pd.DataFrame):
-                        twse.append(t)
-                        accurate_code.append(code)
-                        print(f'[券商進出-證交所] 證券代號={code} | 重試成功')
-                ER=[s for s in ER if s not in accurate_code]
-            except Exception as e:
-                try:
-                    print(f'[券商進出-證交所] 重試批次例外 | 目前代號={code} | {type(e).__name__}: {e}')
-                    er[code]=er[code]+1
-                except Exception:
-                    er[code]=1
-                print(f'[券商進出-證交所] 重試輪次={N} | 各代號重試次數={er}')
-                time.sleep(random.randint(11,25)/10)
-                N=N+1
-                er[code]=er[code]+1
-                if er[code]>3:
-                    if code in ER:
-                        ER.remove(code)
-                    er.pop(code,None)
-                
-                if N > 1500:
+        while position < len(targets) and not aborted:
+            code=targets[position]
+            if self._flush_failures >= self.FLUSH_FAIL_LIMIT:
+                aborted=f'連續 {self._flush_failures} 次分批寫入 DB 都失敗'
+                break
+            status='retry'
+            for attempt in range(1,self.MAX_ATTEMPTS_PER_CODE+1):
+                # 每次嘗試前都檢查時限（單檔最壞可能要 10 幾分鐘 x 12 次，不能只在檔與檔之間檢查）
+                if time.monotonic()-started > self.MAX_RUNTIME_SECONDS:
+                    aborted=f'超過最長執行時間 {self.MAX_RUNTIME_SECONDS/3600:g} 小時'
                     break
-                
-                ER=[s for s in ER if s not in accurate_code]
-        
-        self.result=twse
-    
-    def save(self):
-        if len(self.result)>0:
-            print('[券商進出-證交所] 合併結果並寫入 DB…')
-            result=pd.concat(self.result)
-            result['券商名稱']=result.券商代號.map(self.broker_dict)
-            result=result[~result.duplicated(subset=['日期','證券代號','券商代號'])]
-            result=result.rename(columns=self.union_column_name_dict)
-            result['資料日期']=result['資料日期'].map(self.make_regular_date_format)
-            result=result.sort_values(['證券代號','買賣超'])
+                if attempts > 0:
+                    self._pace(streak)  # 連續快速重試時網站會直接斷線，所以每次嘗試之間都要等
+                attempts+=1
+                kind,payload=self._attempt(code)
+                if kind == 'ok':
+                    result.append(payload)
+                    self.pending.append(payload)
+                    status='ok'
+                    streak=0
+                    ok_since_pause+=1
+                    if pauses and ok_since_pause >= self.PAUSE_RESET_AFTER_OK:
+                        print(f'[券商進出-證交所] 已連續成功 {ok_since_pause} 檔，暫停次數 {pauses} 歸零')
+                        pauses=0
+                    print(f'[券商進出-證交所] 證券代號={code} | 完成 | 第 {attempt} 次嘗試')
+                    since_flush+=1
+                    if since_flush >= self.BATCH_SIZE:
+                        since_flush=0
+                        self._flush_pending()
+                    break
+                if kind == 'no_data':
+                    no_data.append(code)
+                    status='no_data'
+                    streak=0
+                    break
+                if kind == 'blocked':
+                    streak=self.BLOCK_STREAK_LIMIT  # 明確的封鎖訊號：立刻暫停，不必累積失敗次數
+                elif kind == 'conn':
+                    streak+=self.CONN_FAIL_WEIGHT  # 斷線比答錯驗證碼更像限流，加重但不直接暫停
+                elif payload != BSR_PARSE_FAILED:  # 解析失敗是改版而不是封鎖，不算進封鎖偵測
+                    streak+=1
+                if attempts % self.PROGRESS_EVERY == 0:
+                    print(f'[券商進出-證交所][進度] 嘗試 {attempts} 次 | 成功 {len(result)} 檔 | '
+                          f'放棄 {len(given_up)} 檔 | 目前連續失敗 {streak} 次')
+                if streak >= self.BLOCK_STREAK_LIMIT:
+                    pauses+=1
+                    if pauses > self.BLOCK_MAX_PAUSES:
+                        aborted=(f'連續 {self.BLOCK_STREAK_LIMIT} 次嘗試都失敗且已暫停 {self.BLOCK_MAX_PAUSES} 次，'
+                                 '網站可能封鎖或改版')
+                        break
+                    pause=self.BLOCK_PAUSE_SECONDS*2**(pauses-1)
+                    why='收到明確的封鎖訊號' if kind == 'blocked' else f'連續 {streak} 次嘗試 0 次成功（單純答錯的機率極低）'
+                    print(f'[券商進出-證交所][疑似被封鎖] {why}，暫停 {pause} 秒'
+                          f'（第 {pauses}/{self.BLOCK_MAX_PAUSES} 次暫停，逐次加倍）')
+                    self._sleep(pause)
+                    streak=0
+                    ok_since_pause=0
+            if aborted:
+                break
+            if status == 'retry':
+                given_up.append(code)
+                print(f'[券商進出-證交所] 證券代號={code} | 放棄 | 已嘗試 {self.MAX_ATTEMPTS_PER_CODE} 次')
+            position+=1
 
-            super().__init__() #connection 會timeout，很奇怪，明明時間設定都有超過
-            self.delete_count,self.insert_count=self.replace_by_keys(result,self.table_name,self._diff_table_name,
-                ['證券代號','資料日期','券商名稱'],self._select_columns)
+        unprocessed=targets[position:]
+        self.collect_summary={
+            'target':len(targets),'ok':len(result),'no_data':len(no_data),
+            'given_up':len(given_up),'unprocessed':len(unprocessed),
+            'attempts':attempts,'aborted':aborted,'unsaved':len(self.pending)+len(self.rejected),
+            'already':getattr(self,'already_collected',0),
+            'given_up_codes':given_up[:50],'unprocessed_codes':unprocessed[:50],
+        }
+        print(f'[券商進出-證交所] 收集摘要 | 目標={len(targets)} 成功={len(result)} 無明細={len(no_data)} '
+              f'放棄={len(given_up)} 未處理={len(unprocessed)} 嘗試次數={attempts} 中止原因={aborted or "無"}')
+        self.result=result
+    
+    def _flush_pending(self):
+        """
+        把還沒寫入的結果寫進 DB；失敗只記錄、保留在 pending（之後會再試），不中斷收集。
+        整批失敗時改成一檔一檔寫，這樣單一檔案的資料有問題（例如撞唯一鍵）不會擋住其他檔。
+        """
+        from sqlalchemy.exc import IntegrityError
+        failures=getattr(self,'_flush_failures',0)
+        if failures > 0:
+            # 上次連一檔都寫不進去（多半是 DB 暫時掛了）：指數退避後再試，不要馬上重打
+            wait=min(self.FLUSH_BACKOFF_MAX,self.FLUSH_BACKOFF_BASE*2**(failures-1))
+            print(f'[券商進出-證交所] 上次寫入失敗 {failures} 次，等待 {wait} 秒再重試')
+            self._sleep(wait)
+        try:
+            self._write_frames(self.pending)
+            self.pending=[]
+            self._flush_failures=0
+            return True
+        except Exception as e:
+            print(f'[券商進出-證交所] 分批寫入失敗，改為逐檔寫入 | {type(e).__name__}: {str(e)[:300]}')
+        remaining=[]
+        rejected=getattr(self,'rejected',None)
+        if rejected is None:
+            rejected=self.rejected=[]
+        for frame in self.pending:
+            try:
+                self._write_frames([frame])
+            except IntegrityError as e:
+                # 唯一鍵衝突是資料本身的問題，重試只會一再失敗：隔離起來並回報，不再保留重試
+                code=frame['證券代號'].iloc[0] if '證券代號' in frame.columns and len(frame) else '?'
+                print(f'[券商進出-證交所] 證券代號={code} 資料違反唯一鍵，不再重試 | {str(e.orig)[:200]}')
+                rejected.append(frame)
+            except Exception as e:
+                code=frame['證券代號'].iloc[0] if '證券代號' in frame.columns and len(frame) else '?'
+                print(f'[券商進出-證交所] 證券代號={code} 寫入失敗，保留待下次 | {type(e).__name__}: {str(e)[:300]}')
+                remaining.append(frame)
+        progressed=len(remaining) < len(self.pending)
+        self.pending=remaining
+        self._flush_failures=0 if progressed else self._flush_failures+1
+        return not remaining
+
+    def _reconnect(self):
+        """只重建 DB 連線（舊的先關掉）；不要呼叫 StockCollectLogic.__init__，它會重設執行紀錄並掃全表計數。"""
+        try:
+            self.conn.close()
+            self.engine.dispose()
+        except Exception as e:
+            print(f'[券商進出-證交所] 關閉舊連線時出錯（忽略）| {type(e).__name__}: {e}')
+        MySQLConnection.__init__(self,self.sql_configure_path)
+
+    def _write_frames(self,frames):
+        if not frames:
+            return
+        result=pd.concat(frames)
+        # 券商不在 全券商分行地址 時過去會變成 NULL；唯一鍵含券商名稱，NULL 會讓重跑時去不掉舊資料而重複寫入。
+        # 對不到就用券商代號當名稱（不用網頁上往前補齊的名稱，那可能掛到別家）。
+        result['券商名稱'],unmapped=self.fill_branch_names(result,self.broker_dict)
+        if unmapped:
+            print(f'[券商進出-證交所] {len(unmapped)} 個券商代號不在 全券商分行地址，改用代號當名稱: {unmapped[:20]}')
+        result=result[~result.duplicated(subset=['日期','證券代號','券商代號'])]
+        # 最後防線：理論上 fill_branch_names 已處理撞名；若仍有，丟掉重複列並留下紀錄，不要讓整批寫入失敗
+        dup=result.assign(_k=result['券商名稱'].astype(str).str.casefold()).duplicated(subset=['證券代號','_k'])
+        if dup.any():
+            print(f'[券商進出-證交所] 警告：{int(dup.sum())} 列券商名稱（不分大小寫）重複，已略過 | '
+                  f'{result.loc[dup,["證券代號","券商代號"]].head(5).values.tolist()}')
+            result=result[~dup.values]
+        result=result.rename(columns=self.union_column_name_dict)
+        result['資料日期']=result['資料日期'].map(self.make_regular_date_format)
+        result=result.sort_values(['證券代號','買賣超'])
+
+        self._reconnect() #connection 會timeout，很奇怪，明明時間設定都有超過
+        deleted,inserted=self.replace_by_keys(result,self.table_name,self._diff_table_name,
+            ['證券代號','資料日期','券商名稱'],self._select_columns)
+        self._saved_delete=getattr(self,'_saved_delete',0)+deleted
+        self._saved_insert=getattr(self,'_saved_insert',0)+inserted
+        self.delete_count,self.insert_count=self._saved_delete,self._saved_insert
+        print(f'[券商進出-證交所] 已寫入 {len(frames)} 檔（累計 insert={self._saved_insert}）')
+
+    def save(self):
+        """寫入剩餘結果。不丟例外：寫不進去的留在 pending 並記進摘要，由通知回報（丟例外會觸發整段重跑並跳過下游任務）。"""
+        if getattr(self,'pending',None) is None:  # 沒走過 collect（理論上不會發生）
+            self.pending=list(self.result)
+        if self.pending:
+            print('[券商進出-證交所] 寫入剩餘結果…')
+            self._flush_pending()
+        unsaved=len(self.pending)+len(getattr(self,'rejected',[]))
+        if hasattr(self,'collect_summary'):
+            self.collect_summary['unsaved']=unsaved
+        if unsaved:
+            print(f'[券商進出-證交所] 仍有 {unsaved} 檔沒寫入 DB')
 
 
 class StockMajorHolderCollectProcess(StockCollectLogic):

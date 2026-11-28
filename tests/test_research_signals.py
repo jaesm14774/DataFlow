@@ -274,3 +274,13 @@ def test_valuation_directions_use_top_decile_as_bullish():
     directions, _ = rs.assign_forward_directions(scores, {code: "上市" for code in scores})
     assert directions["1299"]["research:earnings_yield"] == 1
     assert directions["1000"]["research:earnings_yield"] == -1
+
+
+def test_revenue_acceleration_needs_both_months_and_is_forward_scored():
+    scores = rs.collect_forward_scores({}, {"revenue_yoy_pct": 12.0, "revenue_yoy_prior_month_pct": 30.0})
+    assert scores["revenue_yoy"] == 12.0 and scores["revenue_yoy_acceleration"] == -18.0
+    # a missing prior month is unknown, not zero acceleration
+    assert "revenue_yoy_acceleration" not in rs.collect_forward_scores({}, {"revenue_yoy_pct": 12.0})
+    assert "revenue_yoy_acceleration" not in rs.collect_forward_scores({}, {"revenue_yoy_prior_month_pct": 5.0})
+    assert rs.FAMILY_BY_NAME["revenue_yoy_acceleration"].forward_scoring
+    assert rs.FAMILY_BY_NAME["revenue_yoy_acceleration"].sign == 1

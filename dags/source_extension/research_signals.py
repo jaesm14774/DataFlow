@@ -30,7 +30,7 @@ import math
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
-RESEARCH_POLICY_VERSION = "research-families-2026-11-28-v3"
+RESEARCH_POLICY_VERSION = "research-families-2026-11-28-v4"
 RESEARCH_FAMILY_PREFIX = "research:"
 
 # Taiwan cash-equity round trip: 0.1425% commission each way (no broker
@@ -124,6 +124,7 @@ FAMILIES: tuple[FamilySpec, ...] = (
         "revenue_yoy_acceleration", "月營收資訊", +1,
         "月營收年增率較上月年增率的加速度",
         "次月 10 日法定期限後一個交易日", horizons=(5, 10, 20, 60),
+        forward_scoring=True,
     ),
     FamilySpec(
         "earnings_yield", "個股基本指標", +1,
@@ -490,6 +491,9 @@ def collect_forward_scores(
     revenue_yoy = _finite((revenue_context or {}).get("revenue_yoy_pct"))
     if revenue_yoy is not None:
         scores["revenue_yoy"] = revenue_yoy
+    prior_yoy = _finite((revenue_context or {}).get("revenue_yoy_prior_month_pct"))
+    if revenue_yoy is not None and prior_yoy is not None:
+        scores["revenue_yoy_acceleration"] = revenue_yoy - prior_yoy
     valuation = valuation_context or {}
     pe_ratio = _finite(valuation.get("pe_ratio"))
     if pe_ratio is not None and pe_ratio > 0:

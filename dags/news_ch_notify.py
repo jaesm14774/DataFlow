@@ -1,10 +1,13 @@
-import pandas as pd, datetime, re
+import pandas as pd, datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
 from common.config import *
 from lib.get_sql import *
 from lib.notify import discord_notifier
+from news_ch.relevance import (
+    BUCKET_DEAL, build_holding_matchers, classify, format_alert, select_for_push,
+)
 
 default_args = {
     'owner':'jaesm14774',
@@ -20,6 +23,7 @@ default_args = {
 notify=discord_notifier('程式執行狀態')
 
 news_ch_notify=discord_notifier('新聞即時通')
+save_money_ch_notify=discord_notifier('好康報')
 
 NOTIFICATION_LOOKUP_INDEX = 'ix_news_notification_source_article'
 
@@ -35,61 +39,34 @@ def _ensure_notification_lookup_index(cursor):
             'ALGORITHM=INPLACE, LOCK=NONE'
         )
 
-def _load_enabled_holding_names(engine):
+def _load_enabled_holdings(engine):
+    """回傳 [(代號, 名稱或None)]。ETF 在全證券代碼表常查不到名稱，因此代號一律保留供標題比對。"""
     all_code = pd.read_sql_query(
         'SELECT 證券代號, 證券名稱 FROM stock.全證券代碼相關資料表', engine
     )
     holdings = pd.read_sql_query(
         'SELECT 持股清單 FROM stock.持股清單 WHERE notify_status=1', engine
     )
-    enabled_codes = set(holdings['持股清單'].dropna().astype(str).str.strip())
-    all_code['證券代號'] = all_code['證券代號'].fillna('').astype(str).str.strip()
-    all_code['證券名稱'] = all_code['證券名稱'].fillna('').astype(str).str.strip()
-    return all_code.loc[all_code['證券代號'].isin(enabled_codes), '證券名稱'].tolist()
-
-def split_content_into_chunks(content, chunk_size=500):
-    """
-    將內容分割成指定大小的塊，以方便發送通知。
-    
-    :param content: 要分割的內容
-    :param chunk_size: 每個塊的字符數
-    :return: 分割後的內容塊列表
-    """
-    return [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
-
-def notify_about_news(news_df):
-    """
-    對給定的新聞DataFrame進行discord通知。
-    
-    :param news_df: 新聞DataFrame，包含source、created_at和content等列
-    """
-    for _, row in news_df.iterrows():
-        content_chunks = split_content_into_chunks(row['content'])
-        news_ch_notify.notify(msg=(str(row['source']) + '\n' + str(row['created_at']) + ':' + row['title']))
-        for chunk in content_chunks:
-            news_ch_notify.notify(msg=f"\n{chunk}")
-        
-        news_ch_notify.notify(msg=row['article_url'])
+    names = {
+        str(c).strip(): (str(n).strip() if pd.notna(n) else '')
+        for c, n in zip(all_code['證券代號'], all_code['證券名稱'])
+    }
+    codes = holdings['持股清單'].dropna().astype(str).str.strip()
+    return [(c, names.get(c) or None) for c in codes if c]
 
 
-def count_keywords_presence(content, keywords):
-    """
-    計算給定內容中出現的指定關鍵字的數量。
-    
-    :param content: 要檢查的內容
-    :param keywords: 關鍵字列表
-    :return: 出現關鍵字的數量
-    """
-    return sum(keyword in content for keyword in keywords)
+def notify_about_news(news_df, classifications, channel):
+    """每則新聞只送一則訊息（標籤 + 標題 + 短摘要 + 連結）。回傳送出失敗的列 index，供呼叫端不寫已讀、下次重試。"""
+    failed = []
+    for (idx, row), cls in zip(news_df.iterrows(), classifications):
+        if channel.notify(msg=format_alert(row.to_dict(), cls)) is False:
+            failed.append(idx)
+    return failed
 
-def keyword_exist_in_text(content, keywords):
-    return all(keyword in content for keyword in keywords)
 
-def _news_notify_with_engine(codes, restricted_conditions, keyword_requirements,
-                             required_keyword_count, must_exist_keyword_list, engine):
-    """
-    根據股票號碼或希望追蹤的關鍵字以及新聞的類別，決定是否使用discord Notify通知。
-    只要文章中出現指定的關鍵字中的任意一定數量時即進行通知。
+def _news_notify_with_engine(holdings, engine):
+    """只通知四類資訊：我的持股、AI/科技、超級折扣(好康)、股市核心；其餘一律視為雜訊。
+    所有候選（含未通知者）都寫入 notification_record，避免下次重複評估。
     """
     select_sql_query = """
         SELECT full.*
@@ -108,65 +85,42 @@ def _news_notify_with_engine(codes, restricted_conditions, keyword_requirements,
 
     if len(original_df) == 0:
         return
-    
-    if codes:
-        code_pattern = '|'.join(map(str, codes)) + '|申報轉讓|成分股'
-        code_info = original_df[original_df.content.str.contains(code_pattern, regex=True)]
-        remain_df = original_df[~original_df.article_id.isin(code_info.article_id)]
-        print(f'notify stock code : {code_info.shape[0]}')
-    
-    if keyword_requirements:
-        filter_keyword_frequency = remain_df['content'].apply(lambda x: count_keywords_presence(x, keyword_requirements) >= required_keyword_count)
-        keyword_info = remain_df[filter_keyword_frequency]
-        
-        if len(must_exist_keyword_list) > 0 and len(keyword_info) > 0:
-            filter_exist_keyword = keyword_info['content'].apply(lambda x: keyword_exist_in_text(x, must_exist_keyword_list))
-            keyword_info=keyword_info[filter_exist_keyword]
-        remain_df = remain_df[~remain_df.article_id.isin(keyword_info.article_id)]
-        print(f'Required keyword : {keyword_info.shape[0]}')
-    
-    notify_about_news(code_info)
-    notify_about_news(keyword_info)
-    
-    for i, restrict in enumerate(restricted_conditions):
-        restrict_source = restrict.get('source')
-        restrict_category = restrict.get('category', [])
-        select_df = remain_df.copy()
-        if restrict_source:
-            select_df = select_df[select_df.source == restrict_source]
-            if len(restrict_category) > 0:
-                select_df = select_df[select_df.category.isin(restrict_category)]
-        print(f'Required restricted condition : {select_df.shape[0]}')
-        notify_about_news(select_df)
-        print(f"已通知完 {i}th篩選條件")
 
-    original_df.loc[:, ['article_id', 'source']].to_sql('notification_record', engine, index=False, if_exists='append')
+    matchers = build_holding_matchers(holdings)
+    candidates = []
+    for idx, row in original_df.iterrows():
+        cls = classify(row['title'], row['content'], row['source'], row['category'], matchers)
+        if cls is not None:
+            candidates.append((idx, cls))
+    print(f"相關候選 {len(candidates)} 篇（其餘視為雜訊）")
+
+    selected = select_for_push([(original_df.loc[i].to_dict() | {'_idx': i}, c) for i, c in candidates])
+    failed_idx = []
+    for bucket, items in selected.items():
+        df = original_df.loc[[row['_idx'] for row, _ in items]]
+        channel = save_money_ch_notify if bucket == BUCKET_DEAL else news_ch_notify
+        failed_idx.extend(notify_about_news(df, [c for _, c in items], channel))
+        print(f"通知 {bucket}: {len(items)} 篇")
+
+    # 送出失敗（如 Discord 429/5xx）的不寫已讀，下次排程重試；其餘（含雜訊、被上限擠掉者）全數記錄
+    original_df.drop(index=failed_idx).loc[:, ['article_id', 'source']].to_sql('notification_record', engine, index=False, if_exists='append')
     print('通知完成')
 
-def news_notify(codes=None, restricted_conditions=None, keyword_requirements=None,
-                required_keyword_count=2, must_exist_keyword_list=None):
+def news_notify(holdings=None):
     conn, cursor, engine = get_sql_from_config('news_ch')
     try:
         _ensure_notification_lookup_index(cursor)
-        if codes is None:
-            codes = _load_enabled_holding_names(engine)
-        if not codes:
-            raise AssertionError('Done')
-        return _news_notify_with_engine(
-            codes=codes,
-            restricted_conditions=restricted_conditions or [],
-            keyword_requirements=keyword_requirements,
-            required_keyword_count=required_keyword_count,
-            must_exist_keyword_list=must_exist_keyword_list or [],
-            engine=engine,
-        )
+        if holdings is None:
+            holdings = _load_enabled_holdings(engine)
+        # 持股清單為空時仍要跑 AI / 好康 / 股市核心三類，不再中止
+        return _news_notify_with_engine(holdings=holdings, engine=engine)
     finally:
         conn.close()
         engine.dispose()
 
 with DAG(
     dag_id='news_ch_notify',
-    description='篩選尚未處理的新聞通知，依持股公司與關鍵字規則投遞並記錄結果。',
+    description='篩選尚未處理的新聞，只推持股 / AI科技 / 超級折扣 / 股市核心，並記錄結果。',
     default_args=default_args,
     schedule='30 1,4,6,10,14,22 * * *',
     catchup=False
@@ -175,15 +129,7 @@ with DAG(
         task_id='news_ch_notify',
         python_callable=news_notify,
         dag=dag,
-        op_kwargs={
-            'codes':None,
-            'restricted_conditions':[
-                {'source':'iThome','category':[]},
-                {'source':'thenewslens','category':['科技', '財經']}
-            ],
-            'keyword_requirements': ['機票', '促銷', '購票', '開賣', '航線', '搶票'],
-            'must_exist_keyword_list': ['機票']
-        },
+        op_kwargs={'holdings': None},
         on_failure_callback=notify.task_custom_failure_function
     )
     

@@ -6,6 +6,7 @@ from lib.notify import discord_notifier
 from common.config import *
 
 from news_ch.news_crawler import CP, InfoTalk, TVBS_SaveMoney
+from news_ch.relevance import BUCKET_DEAL, Classification, format_alert, select_for_push, deal_score
 
 app_name = 'save_money'
 database_name = 'news_ch'
@@ -134,8 +135,17 @@ def notification(conn=None,cursor=None,engine=None):
     
     select_df.loc[:,_key_columns].to_sql(notification_table_name,engine,index=0,if_exists='append')
         
-    for i in range(0,len(select_df)):
-        save_money_ch_notify.notify(msg=str(select_df.source.iloc[i])+'\n'+str(select_df.created_at.iloc[i])+':'+select_df.title.iloc[i]+'\n'+select_df.brief_content.iloc[i])
-        save_money_ch_notify.notify(msg=select_df.article_url.iloc[i])
+    # 只推「真的有折扣力道」的好康：5折以下 / 買一送一 / 免費 / 補助 / 黑五…；
+    # 演唱會、跨年、開幕等活動頁與一般優惠碼整理視為雜訊（已寫入 notification_record，不會重評）。
+    candidates=[]
+    for _,row in select_df.iterrows():
+        score,reason=deal_score(row['title'],(row['brief_content'] if isinstance(row['brief_content'],str) else '')[:120],promo_source=True)
+        if score>=2:
+            candidates.append((row.to_dict(),Classification(BUCKET_DEAL,reason,score)))
+    picked=select_for_push(candidates,caps={BUCKET_DEAL:2}).get(BUCKET_DEAL,[])
+    print(f'[優惠情報] 達標 {len(candidates)} 篇，本次推播 {len(picked)} 篇')
+
+    for row,cls in picked:
+        save_money_ch_notify.notify(msg=format_alert(row,cls))
     
     print('[優惠情報] Discord 通知已送出')

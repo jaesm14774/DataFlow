@@ -693,8 +693,8 @@ class StockMakeMainForceBuySellRecommendationListProcess(StockCalculateLogic):
 
     def find_candidate(self,df,total_day,end_date,threshold,tolerate_day=1):
         if end_date not in df['資料日期'].unique():
-            print(f'[主力買賣超推薦] 無資料日 {end_date}，改用最後可用日 {df["資料日期"].iloc[-1]}')
-            end_date=df['資料日期'].iloc[-1]
+            print(f'[主力買賣超推薦] 無資料日 {end_date}，改用最後可用日 {df["資料日期"].max()}')
+            end_date=df['資料日期'].max()
         
         before_day=df[df.資料日期 <= end_date]['資料日期'].unique()
         
@@ -736,7 +736,11 @@ class StockMakeMainForceBuySellRecommendationListProcess(StockCalculateLogic):
         result2=self.find_candidate(df=self.mainforce_inout,end_date=format(datetime.datetime.now(),'%Y-%m-%d'),
                  threshold=50,total_day=4,tolerate_day=1)
         
-        result=pd.concat([result1,result2],axis=0)
+        frames=[r for r in (result1,result2) if r is not None]
+        if len(frames)==0:
+            self.result=pd.DataFrame()
+            return
+        result=pd.concat(frames,axis=0)
         self.result=result[~result.duplicated(subset=['證券代號','資料日期'])]
     
     def save(self):

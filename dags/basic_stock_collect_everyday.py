@@ -8,6 +8,10 @@ from airflow.utils.edgemodifier import Label
 
 from stock.collect_process import *
 from lib.notify import discord_notifier
+from stock.calculate_process import (
+    calculate_mainforce_buy_sell,
+    make_mainforce_buy_sell_recommendation_list,
+)
 
 #Discord notify
 notify=discord_notifier('程式執行狀態', discord_token_path)
@@ -155,9 +159,26 @@ with DAG(
     
     stock_broker_inout_twse_collect_process >> stock_broker_inout_twse_collect_second_time_process 
     stock_broker_inout_twse_collect_second_time_process >> sleep_process >> stock_all_code_standard_metric_collect_process
-    # Do not launch the legacy recommendation DAG from this collector. Its
-    # per-security quote and broker-query inputs are not approved signal feeds;
-    # the scheduled market-signal path is owned by source_extension.
-    
+    # 主力買賣超（僅上市）：券商分點資料有意義就使用，授權不是排程門檻。
+    # 上櫃抓不到分點資料，已放棄；計算只會涵蓋上市。
+    # 地緣券商推薦鏈（stock_calculate_everyday_process）仍維持手動，不在此觸發。
+    stock_calculate_mainforce_buy_sell_process = PythonOperator(
+        task_id='calculate_mainforce_buy_sell',
+        python_callable=calculate_mainforce_buy_sell,
+        dag=dag,
+        on_failure_callback=notify.task_custom_failure_function
+    )
+
+    stock_make_mainforce_buy_sell_recommendation_list_process = PythonOperator(
+        task_id='make_mainforce_buy_sell_recommendation_list',
+        python_callable=make_mainforce_buy_sell_recommendation_list,
+        dag=dag,
+        on_failure_callback=notify.task_custom_failure_function
+    )
+
+    # 只依賴券商分點收集，不被無關的個股指標任務失敗拖累。
+    stock_broker_inout_twse_collect_second_time_process >> stock_calculate_mainforce_buy_sell_process
+    stock_calculate_mainforce_buy_sell_process >> stock_make_mainforce_buy_sell_recommendation_list_process
+
 if __name__ == "__main__":
     dag.cli()

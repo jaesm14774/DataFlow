@@ -22,16 +22,14 @@ default_args = {
 
 with DAG(
     dag_id='stock_calculate_everyday_process',
-    description='舊版券商與主力推薦清單；未確認逐股資料授權前不由收集 DAG 觸發。',
+    description='舊版地緣券商推薦清單（手動）；主力買賣超已移到 stock_collect_everyday_process 每日排程。',
     default_args=default_args,
     schedule=None,
     catchup=False
 ) as dag:
-    # This DAG is intentionally manual-only while its per-security broker
-    # query inputs remain outside the approved market-wide signal feeds.
-    # The legacy institutional-flow branches used a website-query feed. Keep
-    # them out of scheduled signals until listed-market batch authorization,
-    # TPEx coverage, PIT history, and outcome checks are established.
+    # 此 DAG 只剩地緣券商推薦鏈，維持手動：2026-11 的回測顯示
+    # 地緣券商沒有買進訊號，不是因為授權。主力買賣超已搬到
+    # stock_collect_everyday_process（僅上市，上櫃分點抓不到已放棄）。
 
     stock_calculate_broker_recommendation_process = PythonOperator(
         task_id='calculate_broker_recommendation',
@@ -54,22 +52,6 @@ with DAG(
         on_failure_callback=notify.task_custom_failure_function
     )   
 
-    stock_calculate_mainforce_buy_sell_process = PythonOperator(
-        task_id='calculate_mainforce_buy_sell',
-        python_callable=calculate_mainforce_buy_sell,
-        dag=dag,
-        on_failure_callback=notify.task_custom_failure_function
-    )   
-    
-    stock_make_mainforce_buy_sell_recommendation_list_process = PythonOperator(
-        task_id='make_mainforce_buy_sell_recommendation_list',
-        python_callable=make_mainforce_buy_sell_recommendation_list,
-        dag=dag,
-        on_failure_callback=notify.task_custom_failure_function
-    )   
-     
-    
-    stock_calculate_mainforce_buy_sell_process >> stock_make_mainforce_buy_sell_recommendation_list_process
     stock_calculate_broker_recommendation_process >> stock_calculate_broker_ten_days_recommendation_process
     
     stock_calculate_broker_ten_days_recommendation_process >> stock_make_broker_inout_recommendation_list_process

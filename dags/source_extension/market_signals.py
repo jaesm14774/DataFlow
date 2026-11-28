@@ -491,6 +491,29 @@ def _month_over_month_revenue_context(
     }
 
 
+def _prior_month_yoy_context(rows: list[tuple[Any, ...]]) -> dict[str, Any]:
+    """Prior calendar month's reported YoY, for the research-only acceleration score.
+
+    Only the immediately preceding month counts; a gap yields no value (unknown,
+    never zero). Rows are already point-in-time filtered by the caller.
+    """
+
+    if not rows or not rows[-1][0]:
+        return {}
+    latest_period = rows[-1][0]
+    by_period: dict[dt.date, Any] = {}
+    for row in rows:
+        if row[0] and row[2] is not None:
+            by_period[row[0]] = row[2]
+    month_index = latest_period.year * 12 + latest_period.month - 2
+    prior_year, prior_month_zero = divmod(month_index, 12)
+    prior_period = dt.date(prior_year, prior_month_zero + 1, 1)
+    prior_yoy = _number(by_period.get(prior_period))
+    if prior_yoy is None:
+        return {}
+    return {"revenue_yoy_prior_month_pct": prior_yoy}
+
+
 def _load_material_convertible_bond_cash_context(
     cursor, *, codes: set[str], as_of_date: dt.date,
     started_at: dt.datetime, source_updated_at_cutoff: dt.datetime,
@@ -2837,6 +2860,7 @@ def _load_daily_candidates(
                     "source_key": current_source_key,
                     "source_url": current_source_url,
                     **_month_over_month_revenue_context(revenue_rows),
+                    **_prior_month_yoy_context(revenue_rows),
                     **_trailing_three_month_revenue_context(revenue_rows),
                 }
                 # Monthly revenue remains a descriptive context field. It does
@@ -3245,6 +3269,7 @@ def _load_daily_candidates(
                 positioning_context, revenue_context,
                 return_5d_pct=price_context.get("return_5d_pct"),
                 closes=closes if len(closes) >= 16 else None,
+                valuation_context=valuation_context_by_code.get(code),
             )
             if research_raw:
                 research_scores_by_code[code] = research_raw

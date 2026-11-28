@@ -30,7 +30,7 @@ import math
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
-RESEARCH_POLICY_VERSION = "research-families-2026-11-08-v2"
+RESEARCH_POLICY_VERSION = "research-families-2026-11-28-v4"
 RESEARCH_FAMILY_PREFIX = "research:"
 
 # Taiwan cash-equity round trip: 0.1425% commission each way (no broker
@@ -124,6 +124,22 @@ FAMILIES: tuple[FamilySpec, ...] = (
         "revenue_yoy_acceleration", "月營收資訊", +1,
         "月營收年增率較上月年增率的加速度",
         "次月 10 日法定期限後一個交易日", horizons=(5, 10, 20, 60),
+        forward_scoring=True,
+    ),
+    FamilySpec(
+        "earnings_yield", "個股基本指標", +1,
+        "盈利殖利率（100/本益比，僅本益比>0）高者價值面便宜，長期相對較強",
+        "T 日盤後公布（BWIBBU/peQry）", horizons=(5, 10, 20, 60), forward_scoring=True,
+    ),
+    FamilySpec(
+        "book_to_market", "個股基本指標", +1,
+        "淨值市價比（1/股價淨值比，僅 PB>0）高者價值面便宜",
+        "T 日盤後公布（BWIBBU/peQry）", horizons=(5, 10, 20, 60), forward_scoring=True,
+    ),
+    FamilySpec(
+        "dividend_yield", "個股基本指標", +1,
+        "現金殖利率高者具評價支撐；僅比較有配息（>0）者，未配息視為未評分",
+        "T 日盤後公布（BWIBBU/peQry）", horizons=(5, 10, 20, 60), forward_scoring=True,
     ),
     FamilySpec(
         "short_term_reversal_5d", "個股成交資訊", -1,
@@ -447,6 +463,7 @@ def collect_forward_scores(
     *,
     return_5d_pct: Any = None,
     closes: Sequence[Any] | None = None,
+    valuation_context: Mapping[str, Any] | None = None,
 ) -> dict[str, float]:
     """Raw research scores derivable from the daily scan's existing context.
 
@@ -474,6 +491,21 @@ def collect_forward_scores(
     revenue_yoy = _finite((revenue_context or {}).get("revenue_yoy_pct"))
     if revenue_yoy is not None:
         scores["revenue_yoy"] = revenue_yoy
+    prior_yoy = _finite((revenue_context or {}).get("revenue_yoy_prior_month_pct"))
+    if revenue_yoy is not None and prior_yoy is not None:
+        scores["revenue_yoy_acceleration"] = revenue_yoy - prior_yoy
+    valuation = valuation_context or {}
+    pe_ratio = _finite(valuation.get("pe_ratio"))
+    if pe_ratio is not None and pe_ratio > 0:
+        scores["earnings_yield"] = 100.0 / pe_ratio
+    price_to_book = _finite(valuation.get("price_to_book"))
+    if price_to_book is not None and price_to_book > 0:
+        scores["book_to_market"] = 1.0 / price_to_book
+    dividend_yield = _finite(valuation.get("dividend_yield_pct"))
+    # Non-payers (0) would form one giant tie block that straddles the tail
+    # cut and neutralises the whole bearish side, so they stay unscored.
+    if dividend_yield is not None and dividend_yield > 0:
+        scores["dividend_yield"] = dividend_yield
     five_day = _finite(return_5d_pct)
     if five_day is not None:
         scores["short_term_reversal_5d"] = five_day

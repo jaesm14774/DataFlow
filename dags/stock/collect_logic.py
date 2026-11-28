@@ -2124,59 +2124,40 @@ class StockMonthRevenueCollectProcess(StockCollectLogic):
         
         return df
     
+    def _fetch_bulk_rows(self, url):
+        """官方 OpenAPI 批次；失敗最多重試 3 次，仍失敗就拋錯（不再靜默成功）。"""
+        last_error = None
+        for attempt in range(1, 4):
+            try:
+                response = requests.get(url, timeout=60, headers={'User-Agent': 'DataFlow-month-revenue/1.0'})
+                response.raise_for_status()
+                rows = response.json()
+                if not isinstance(rows, list) or not rows:
+                    raise ValueError('月營收批次來源回傳空資料或非陣列')
+                return rows
+            except Exception as e:
+                last_error = e
+                print(f'[月營收] 批次來源失敗 | url={url} | 第{attempt}次 | {type(e).__name__}: {e}')
+                time.sleep(attempt * 3)
+        raise RuntimeError(f'月營收批次來源連續失敗: {url}') from last_error
+
     def collect(self):
-        error=[]
-        result=[]
-        for i in range(len(self.all_code)):
-            code=self.all_code[i]
-            try:
-                df=self.get_month_revenue(code)
-                result.append(df)
-                
-                print(f'[月營收] 證券代號={code} | 首輪完成')
-                time.sleep(random.randint(2,4))
-            except Exception as e:
-                error.append(code)
-                print(f'[月營收] 首輪失敗 | 證券代號={code} | {type(e).__name__}: {e}')
+        """逐檔 MOPS 爬取已於 2025-03 失效（頁面缺「年度」欄，曾重試 500 輪仍回報成功卻寫入 0 筆），
+        改用上市/上櫃官方批次來源（最新一個月、全部公司），欄位與本表一致。"""
+        from stock import month_revenue_bulk
+        rows_by_market = {
+            'twse': self._fetch_bulk_rows(month_revenue_bulk.TWSE_URL),
+            'tpex': self._fetch_bulk_rows(month_revenue_bulk.TPEX_URL),
+        }
+        frame = month_revenue_bulk.bulk_frame(rows_by_market, valid_codes=self.all_code)
+        if frame.empty:
+            raise RuntimeError('月營收批次來源沒有可用資料（代號/月份/當月營收皆需有效）')
+        for column in ('當月營收', '上月營收', '去年當月營收', '當月累計營收', '去年累計營收'):
+            frame[column] = frame[column].round().astype('Int64')
+        months = sorted(frame['資料日期'].unique())
+        print(f'[月營收] 批次完成 | 筆數={len(frame)} | 月份={months} | 上市+上櫃代號={frame["證券代號"].nunique()}')
+        self.result = [frame]
 
-        error_length=len(error)
-        accurate_code=[]
-        N=0
-
-        error_counter_dict={}
-        for code in error:
-            error_counter_dict[code]=1        
-
-        while error_length != 0:
-            try:
-                for code in error:
-                    df=self.get_month_revenue(code)
-                    result.append(df)
-                    print(f'[月營收] 證券代號={code} | 重試成功')
-                    accurate_code.append(code)
-                    time.sleep(random.randint(2,4))
-                
-                error_length=0
-            except Exception as e:
-                print(f'[月營收] 重試失敗 | 證券代號={code} | 第{N}輪 | {type(e).__name__}: {e}')
-                N+=1
-                error_counter_dict[code]+=+1
-                
-                if error_counter_dict[code]>3:
-                    if code in error:
-                        error.remove(code)
-                    error_counter_dict.pop(code,None)
-                
-                if N>500:
-                    break
-                    
-                error=list(set(error)-set(accurate_code))
-                error_length=len(error)
-                
-                time.sleep(1)  
-        
-        self.result=result 
-    
     def save(self):
         if len(self.result)>0:
             self.result=pd.concat(self.result)

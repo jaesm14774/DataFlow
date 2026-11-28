@@ -3245,6 +3245,7 @@ def _load_daily_candidates(
                 positioning_context, revenue_context,
                 return_5d_pct=price_context.get("return_5d_pct"),
                 closes=closes if len(closes) >= 16 else None,
+                valuation_context=valuation_context_by_code.get(code),
             )
             if research_raw:
                 research_scores_by_code[code] = research_raw

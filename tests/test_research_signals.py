@@ -251,3 +251,26 @@ def test_news_polarity_with_exactly_five_sessions_drops_prior_week_titles():
     ]
     row = rs.news_polarity_by_code(titles, five, trie, codes)["2317"]
     assert row["news_n"] == 1
+
+
+def test_valuation_families_are_value_signed_and_skip_nonpositive_denominators():
+    scores = rs.collect_forward_scores(
+        {}, {}, valuation_context={"pe_ratio": 20.0, "price_to_book": 2.0, "dividend_yield_pct": 4.0},
+    )
+    assert scores == {"earnings_yield": 5.0, "book_to_market": 0.5, "dividend_yield": 4.0}
+    # loss-making (PE<=0 / missing) and negative-equity names get no score, never zero
+    partial = rs.collect_forward_scores(
+        {}, {}, valuation_context={"pe_ratio": 0, "price_to_book": -1.0, "dividend_yield_pct": 0.0},
+    )
+    assert partial == {}  # non-payers (0) stay unscored to avoid a tie block over the tail cut
+    assert rs.collect_forward_scores({}, {}, valuation_context={"pe_ratio": float("nan")}) == {}
+    for name in ("earnings_yield", "book_to_market", "dividend_yield"):
+        spec = rs.FAMILY_BY_NAME[name]
+        assert spec.sign == 1 and spec.forward_scoring
+
+
+def test_valuation_directions_use_top_decile_as_bullish():
+    scores = {f"{1000 + i}": {"earnings_yield": float(i)} for i in range(300)}
+    directions, _ = rs.assign_forward_directions(scores, {code: "上市" for code in scores})
+    assert directions["1299"]["research:earnings_yield"] == 1
+    assert directions["1000"]["research:earnings_yield"] == -1

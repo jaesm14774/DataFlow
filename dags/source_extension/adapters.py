@@ -762,6 +762,9 @@ SOURCE_CONTRACTS = {
     "twse_securities_borrowing_daily": (
         "twse_json", "https://www.twse.com.tw/rwd/zh/marginTrading/TWT93U?response=json"
     ),
+    "twse_foreign_holdings_daily": (
+        "twse_json", "https://www.twse.com.tw/rwd/zh/fund/MI_QFIIS?selectType=ALLBUT0999&response=json"
+    ),
     "twse_market_index_daily": ("twse_json", "https://openapi.twse.com.tw/v1/indicesReport/MI_5MINS_HIST"),
     "tpex_market_index_daily": ("tpex_json", "https://www.tpex.org.tw/openapi/v1/tpex_index"),
     "twse_market_total_return_index_daily": (
@@ -3221,6 +3224,103 @@ def _normalize_twse_securities_borrowing_table(
     return result
 
 
+def _normalize_twse_foreign_holdings_table(
+    source: dict[str, Any],
+    payload: Any,
+    allowed_codes: Any,
+    observed_date: dt.date,
+) -> list[dict[str, Any]]:
+    """TWSE MI_QFIIS (外資及陸資投資持股統計), one row per listed security.
+
+    Same event/metric as the TPEx ranking feed so both markets share
+    `foreign_ownership_daily` / `foreign_holding_ratio_pct`. The header is
+    verified by name; drift, a future date or duplicate codes reject the batch.
+    Rows outside the listed stock master (ETFs, warrants) are not stored.
+    """
+
+    if not isinstance(payload, dict) or str(payload.get("stat") or "").upper() != "OK":
+        raise ValueError("MI_QFIIS response is not an OK table")
+    fields = payload.get("fields")
+    rows = payload.get("data")
+    expected = [
+        "證券代號", "證券名稱", "國際證券編碼", "發行股數", "外資及陸資尚可投資股數",
+        "全體外資及陸資持有股數", "外資及陸資尚可投資比率", "全體外資及陸資持股比率",
+        "外資及陸資共用法令投資上限比率", "陸資法令投資上限比率",
+    ]
+    if (
+        not isinstance(fields, list)
+        or [str(x).strip() for x in fields[:10]] != expected
+        or not isinstance(rows, list)
+    ):
+        raise ValueError("MI_QFIIS field layout changed")
+    if len(rows) > MAX_SOURCE_ROWS:
+        raise ValueError("source row count exceeds limit")
+    effective_date = parse_roc_date(payload.get("date"))
+    if effective_date is None or effective_date > observed_date:
+        raise ValueError("MI_QFIIS has a missing or future data date")
+    codes = {code for code, market in (allowed_codes or set()) if market == "上市"}
+    if not codes:
+        raise ValueError("MI_QFIIS requires a listed stock master")
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 10:
+            continue
+        code = str(row[0]).strip()
+        if code not in codes:
+            continue
+        if code in seen:
+            raise ValueError("MI_QFIIS has duplicate security codes")
+        seen.add(code)
+        issued = parse_number(row[3])
+        available = parse_number(row[4])
+        held = parse_number(row[5])
+        available_pct = parse_number(row[6])
+        holding_pct = parse_number(row[7])
+        cap_pct = parse_number(row[8])
+        valid = (
+            issued is not None and issued > 0
+            and available is not None and available >= 0
+            and held is not None and 0 <= held <= issued
+            and all(v is not None and 0 <= v <= 100 for v in (available_pct, holding_pct, cap_pct))
+            and abs(held / issued * 100 - holding_pct) <= 0.05
+        )
+        details = {
+            "effective_date": effective_date.isoformat(),
+            "security_name": str(row[1]).strip() or None,
+            "issued_shares": int(issued) if issued is not None else None,
+            "foreign_available_shares": int(available) if available is not None else None,
+            "foreign_held_shares": int(held) if held is not None else None,
+            "foreign_available_ratio_pct": available_pct,
+            "foreign_holding_ratio_pct": holding_pct,
+            "legal_investment_cap_pct": cap_pct,
+            "interpretation": "listed_foreign_ownership_snapshot_context_only",
+        }
+        safe_record = {
+            "市場別": "上市", "資料日期": effective_date.isoformat(), "證券代號": code,
+            **{expected[i]: row[i] for i in range(1, 10)},
+        }
+        result.append(
+            _common_record(
+                source,
+                record_key=f"TWSE-FOREIGN-HOLDING:{effective_date}:{code}",
+                entity_id=code,
+                event_type="foreign_ownership_daily",
+                event_time=None,
+                effective_date=effective_date,
+                title=f"TWSE 外資及陸資持股 {code} {details['security_name'] or ''}".strip(),
+                metric_name="foreign_holding_ratio_pct",
+                metric_value=holding_pct,
+                value_text=json.dumps(details, ensure_ascii=False, separators=(",", ":")),
+                unit="percent_of_issued_shares",
+                currency=None,
+                raw_record=safe_record,
+                quality_status="ok" if valid else "quarantine",
+            )
+        )
+    return result
+
+
 def _normalize_cbc(source: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
     data = payload.get("data") or {}
     rows = data.get("dataSets") or []
@@ -3558,6 +3658,10 @@ def fetch_and_normalize(
         )
     if source["adapter_key"] == "cbc_api_json":
         return _normalize_cbc(source, payload), response_status
+    if source["config"].get("kind") == "twse_foreign_holdings_table":
+        return _normalize_twse_foreign_holdings_table(
+            source, payload, allowed_stock_market_codes, snapshot_date
+        ), response_status
     if source["config"].get("kind") == "twse_securities_borrowing_table":
         return _normalize_twse_securities_borrowing_table(
             source, payload, allowed_stock_market_codes, snapshot_date
